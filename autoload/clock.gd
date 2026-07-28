@@ -38,6 +38,7 @@ func _process(delta: float) -> void:
 		_accumulator = 0.0
 
 
+## Clock deliberately touches no state of its own. It only says "a step happened";
+## GameState owns every write, including the tick counter.
 func _advance_one_tick() -> void:
-	GameState.data.ticks_elapsed += 1
 	tick.emit(TICK_SECONDS)

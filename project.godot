@@ -12,9 +12,10 @@ config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [autoload]
 
+; Order matters: GameState connects to Clock.tick in _ready, so Clock must exist first.
 SignalBus="*res://autoload/signal_bus.gd"
-GameState="*res://autoload/game_state.gd"
 Clock="*res://autoload/clock.gd"
+GameState="*res://autoload/game_state.gd"
 
 [display]
 

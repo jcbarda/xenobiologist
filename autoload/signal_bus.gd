@@ -15,3 +15,8 @@ signal action_resolved(action_id: StringName)
 ## Emitted when the run's day index advances. The lid owns the transition (M5);
 ## this only announces it.
 signal day_advanced(day: int)
+
+## The sim has halted because the player went under. `cause` is the vital that
+## gave out, so the panel can name it -- pairing symptom with cause is RISK-1's
+## mitigation and matters more here than anywhere else. M5 slams the lid on this.
+signal blackout(cause: String)

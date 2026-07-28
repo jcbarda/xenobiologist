@@ -50,17 +50,36 @@ only question that matters.
 in a non-interactive shell.
 
 ```bash
-godot --headless --quit                                    # parse + import check
+godot --headless --path . --editor --quit                  # rescan; needed after adding class_name
+godot --headless --path . --quit                           # parse + import check
 mkdir -p build                                             # export aborts if it is missing
-godot --headless --export-release "Web" build/index.html   # web export check
+godot --headless --path . --export-release "Web" build/index.html
 # TODO: add the gdUnit4/GUT headless test command once tests exist
 ```
+
+Always pass `--path .` — a bare invocation resolves the project from the shell's cwd, which
+drifts, and the failure ("provide a valid project path") does not name the real cause.
+
+**After adding a script with a new `class_name`, run the `--editor --quit` rescan first.**
+Otherwise the parse check reports `Identifier "Foo" not declared` for a class that is
+perfectly fine — the global class cache simply has not been rebuilt, and the error names
+the consumer rather than the cause.
+
+To drive the sim headless, run a scene positionally: `godot --headless --path . res://x.tscn`.
+Autoloads load normally, so this is how to check that `Clock` actually advances state
+without involving a browser.
 
 To check the export in a browser: `cd build && python3 -m http.server 8777`, then open
 `http://localhost:8777/index.html`. The Web preset is built **without thread support**, so
 no COOP/COEP headers are needed and a plain static server is enough — keep it that way
 unless something forces threads, because itch.io's iframe makes cross-origin isolation
 awkward.
+
+⚠ **A backgrounded tab will look like a frozen sim.** Chrome pauses `requestAnimationFrame`
+in tabs that are not visible, so Godot's main loop stops and every readout sits at its
+boot value — indistinguishable from `Clock` being broken. Click into the page and confirm
+the tab is foregrounded before concluding anything about the sim. Verify tick behaviour
+headless; use the browser for render, input, audio-unlock, and persistence.
 
 Run the parse check after any GDScript change — do not report work as done on code that
 has never been executed. Verify browser behaviour (audio unlock, `user://` save
