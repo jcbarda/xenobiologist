@@ -27,8 +27,19 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	var data: Dictionary = GameState.data
-	_temp_readout.text = "CORE TEMP        %5.1f C" % data.core_temperature
-	_static_readout.text = "NEURAL STATIC    %5.0f %%" % (data.neural_static * 100.0)
+	_temp_readout.text = "CORE TEMP        %5.1f C  %s" % [
+		data.core_temperature, _trend(data.temp_velocity, 0.02),
+	]
+	# The rest point is shown because momentum makes the number alone a lie: a
+	# static reading of 30%% that is settling toward 70%% is an emergency, and it
+	# looks identical to one that is settling toward 10%%. Naming where it is
+	# headed -- and that core temperature is what decides it -- is RISK-1's
+	# pair-the-symptom-with-its-cause, applied to the model's least visible part.
+	_static_readout.text = "NEURAL STATIC    %5.0f %%  %s   settling toward %.0f %%" % [
+		data.neural_static * 100.0,
+		_trend(data.static_velocity, 0.004),
+		Tuning.static_rest_point(data.core_temperature) * 100.0,
+	]
 	_water_readout.text = "H2O RESERVE      %2d / %d" % [
 		data.water, Tuning.WATER_CAPACITY,
 	]
@@ -77,11 +88,23 @@ func _build_actions() -> void:
 func _describe_cost(action: Dictionary) -> String:
 	var parts: PackedStringArray = []
 	parts.append("H2O %+d" % action.water)
-	if action.temp != 0.0:
-		parts.append("TEMP %+.1f C" % action.temp)
+	if action.temp_impulse != 0.0:
+		parts.append("TEMP %s" % ("cools" if action.temp_impulse < 0.0 else "heats"))
+	if action.brake > 0.0:
+		parts.append("arrests static's climb")
 	var net_static: float = Tuning.COGNITIVE_LOAD + action.exertion - action.damping
-	parts.append("STATIC %+.0f%%" % (net_static * 100.0))
+	parts.append("STATIC %+.0f%%/s" % (net_static * 100.0))
 	return "  ".join(parts)
+
+
+## Momentum is otherwise invisible: the value can sit still for a second while
+## the velocity behind it is already committed.
+func _trend(velocity: float, deadband: float) -> String:
+	if velocity > deadband:
+		return "^"
+	if velocity < -deadband:
+		return "v"
+	return "-"
 
 
 func _build_status_line() -> void:

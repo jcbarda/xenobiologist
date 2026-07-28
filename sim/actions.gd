@@ -2,50 +2,60 @@ class_name Actions
 extends RefCounted
 ## The player's verbs, as data.
 ##
-## Activity is physical, so an action moves core temperature and adds exertion
-## static on top of the flat cognitive cost every action pays. That is what makes
-## fetching water a real decision rather than free upkeep: hauling it in the heat
-## costs you the very thing you are hauling it to fix.
+## Actions push velocity, never a value. Nothing lands on the frame it is
+## pressed -- the vitals carry momentum, so every action is a bet on where things
+## will be in a few seconds rather than a correction to where they are now.
 ##
-## Fields:
-##   water     -- units gained (+) or spent (-); the shared chokepoint
-##   temp      -- core temperature delta in degrees C
-##   exertion  -- static added by physical effort, before COGNITIVE_LOAD
-##   damping   -- static actively removed; the action's therapeutic effect
+## Activity is physical, so an action moves core temperature and adds exertion on
+## top of the flat cognitive load every action pays. That is what makes fetching
+## water a real decision rather than free upkeep: hauling it in the heat costs
+## you the very thing you are hauling it to fix.
+##
+## Fields (all applied to velocity):
+##   water         -- units gained (+) or spent (-); the shared chokepoint
+##   temp_impulse  -- push on core temperature's velocity
+##   exertion      -- static added by physical effort, before COGNITIVE_LOAD
+##   damping       -- static actively pushed down; bounded by Tuning's exchange rate
+##   brake         -- fraction of static velocity killed outright
 
 const FLUSH_COOLANT := &"flush_coolant"
 const NEURAL_DAMPER := &"neural_damper"
 const DRAW_WATER := &"draw_water"
 
 const CATALOGUE := {
-	# Cheap on the body, expensive on the canteen. Buys temperature headroom,
-	# which indirectly slows future static -- but cannot touch static already
-	# banked.
+	# The only durable treatment. It does not touch static directly -- it drags
+	# core temperature down, which lowers static's rest point, and gravity does
+	# the rest. Slow, because thermal inertia is high, so it must be pressed
+	# before the player feels they need it.
 	FLUSH_COOLANT: {
 		"label": "FLUSH COOLANT",
 		"water": -2,
-		"temp": -1.5,
-		"exertion": 0.01,
+		"temp_impulse": -0.55,
+		"exertion": 0.02,
 		"damping": 0.0,
+		"brake": 0.0,
 	},
-	# The only way to claw back accumulated static, and the cheaper of the two
-	# stabilisers -- so the trap is dampering through a crisis while core
-	# temperature keeps climbing and the canteen empties.
+	# The emergency brake. Kills static's momentum and shoves it down a little,
+	# but cannot get beneath the rest point core temperature dictates -- so it
+	# buys seconds, never a cure. Leaning on it instead of cooling is the trap.
 	NEURAL_DAMPER: {
 		"label": "NEURAL DAMPER",
-		"water": -1,
-		"temp": 0.0,
+		"water": -2,
+		"temp_impulse": 0.0,
 		"exertion": 0.0,
-		"damping": 0.15,
+		"damping": 0.12,
+		"brake": Tuning.DAMPER_BRAKE,
 	},
-	# Renews the chokepoint, but it is the one genuinely strenuous act available:
-	# it heats you and it costs the most static of anything here.
+	# Renews the chokepoint, and is the one genuinely strenuous act available: it
+	# heats you and costs the most static of anything here. Its exertion is what
+	# keeps the treadmill from becoming a static engine.
 	DRAW_WATER: {
 		"label": "DRAW WATER",
-		"water": 4,
-		"temp": 0.4,
-		"exertion": 0.05,
+		"water": Tuning.WATER_PER_DRAW,
+		"temp_impulse": 0.12,
+		"exertion": 0.14,
 		"damping": 0.0,
+		"brake": 0.0,
 	},
 }
 

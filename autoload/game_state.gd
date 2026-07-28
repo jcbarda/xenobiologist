@@ -11,7 +11,7 @@ extends Node
 ## Presentation may read `data` every frame; it may never write.
 
 ## Bumped whenever the shape of `data` changes in a way old saves cannot satisfy.
-const SCHEMA_VERSION := 2
+const SCHEMA_VERSION := 3
 
 var data: Dictionary = {}
 
@@ -33,6 +33,10 @@ func reset() -> void:
 		"day": 1,
 		"core_temperature": Tuning.CORE_TEMP_START,
 		"neural_static": 0.0,
+		# Momentum. Serialised with everything else, so a reloaded run resumes
+		# mid-glide rather than snapping to rest.
+		"temp_velocity": 0.0,
+		"static_velocity": 0.0,
 		"water": Tuning.WATER_START,
 		# Listed in design-doc 4.1 as a vital but deliberately inert for the
 		# slice: section 8 names two clocks, and a third would blur the read.
@@ -73,28 +77,46 @@ func _on_tick(sim_delta: float) -> void:
 	_check_collapse()
 
 
+## Actions push velocity, never a value -- see actions.gd.
 func _resolve_pending_actions() -> void:
 	for action_id in _pending:
 		if not can_afford(action_id):
 			continue
 		var action: Dictionary = Actions.spec(action_id)
 		data.water = clampi(data.water + action.water, 0, Tuning.WATER_CAPACITY)
-		data.core_temperature += action.temp
-		# Cognitive load is flat per action (OQ-1); exertion and damping are
-		# properties of the specific activity.
-		data.neural_static += Tuning.COGNITIVE_LOAD + action.exertion - action.damping
-		data.neural_static = clampf(data.neural_static, 0.0, Tuning.STATIC_BLACKOUT)
+		data.temp_velocity += action.temp_impulse
+
+		# Brake before paying the cognitive load, so a damper can never cancel
+		# the cost of having been pressed. This ordering is what makes spamming
+		# it strictly negative once static has stopped climbing.
+		data.static_velocity *= 1.0 - float(action.brake)
+		# Cognitive load is flat per action (OQ-1); exertion and damping belong
+		# to the specific activity.
+		data.static_velocity += (
+			Tuning.COGNITIVE_LOAD + action.exertion - action.damping
+		)
 		SignalBus.action_resolved.emit(action_id)
 	_pending.clear()
 
 
+## Second-order integration: gravity accelerates each vital toward its rest
+## point, friction bleeds the velocity off, and the value follows the velocity.
 func _advance_vitals(sim_delta: float) -> void:
-	data.core_temperature += Tuning.CORE_TEMP_RISE * sim_delta
-	var over_threshold: float = maxf(
-		0.0, data.core_temperature - Tuning.STATIC_HEAT_THRESHOLD
+	# Core temperature falls toward ambient, which is well past collapse.
+	data.temp_velocity += (
+		Tuning.TEMP_GRAVITY * (Tuning.AMBIENT_TEMP - data.core_temperature) * sim_delta
 	)
-	data.neural_static += Tuning.STATIC_HEAT_GAIN * over_threshold * sim_delta
-	data.neural_static = clampf(data.neural_static, 0.0, Tuning.STATIC_BLACKOUT)
+	data.temp_velocity -= data.temp_velocity * Tuning.TEMP_FRICTION * sim_delta
+	data.core_temperature += data.temp_velocity * sim_delta
+
+	# Static settles wherever body heat says it should. This is the coupling that
+	# makes cooling the only durable treatment.
+	var rest: float = Tuning.static_rest_point(data.core_temperature)
+	data.static_velocity += Tuning.STATIC_GRAVITY * (rest - data.neural_static) * sim_delta
+	data.static_velocity -= data.static_velocity * Tuning.STATIC_FRICTION * sim_delta
+	data.neural_static = clampf(
+		data.neural_static + data.static_velocity * sim_delta, 0.0, Tuning.STATIC_BLACKOUT
+	)
 
 
 ## Not a death screen -- the sim halts and M5 will slam the lid on it. Static is
