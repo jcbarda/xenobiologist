@@ -11,7 +11,7 @@ extends Node
 ## Presentation may read `data` every frame; it may never write.
 
 ## Bumped whenever the shape of `data` changes in a way old saves cannot satisfy.
-const SCHEMA_VERSION := 3
+const SCHEMA_VERSION := 4
 
 var data: Dictionary = {}
 
@@ -38,6 +38,9 @@ func reset() -> void:
 		"temp_velocity": 0.0,
 		"static_velocity": 0.0,
 		"water": Tuning.WATER_START,
+		# Ambient heat of wherever the player is. Phase 0 happens at the oasis
+		# edge; M4 will move this, and moving it is the entire excursion budget.
+		"ambient_temperature": Tuning.AMBIENT_OASIS_EDGE,
 		# Listed in design-doc 4.1 as a vital but deliberately inert for the
 		# slice: section 8 names two clocks, and a third would blur the read.
 		"hydration": 1.0,
@@ -102,9 +105,9 @@ func _resolve_pending_actions() -> void:
 ## Second-order integration: gravity accelerates each vital toward its rest
 ## point, friction bleeds the velocity off, and the value follows the velocity.
 func _advance_vitals(sim_delta: float) -> void:
-	# Core temperature falls toward ambient, which is well past collapse.
+	# Core temperature is dragged toward wherever the player is standing.
 	data.temp_velocity += (
-		Tuning.TEMP_GRAVITY * (Tuning.AMBIENT_TEMP - data.core_temperature) * sim_delta
+		Tuning.TEMP_GRAVITY * (data.ambient_temperature - data.core_temperature) * sim_delta
 	)
 	data.temp_velocity -= data.temp_velocity * Tuning.TEMP_FRICTION * sim_delta
 	data.core_temperature += data.temp_velocity * sim_delta
