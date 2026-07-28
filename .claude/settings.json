@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(godot --headless:*)",
+      "Bash($GODOT_PATH --headless:*)",
+      "Bash(/Applications/Godot.app/Contents/MacOS/Godot --headless:*)"
+    ]
+  }
+}

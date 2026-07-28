@@ -1,0 +1,65 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/game_root.gd" id="1_root"]
+
+[node name="GameRoot" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_root")
+
+[node name="TerminalUI" type="Control" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="ScreenBackground" type="TextureRect" parent="TerminalUI"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="MainLayout" type="MarginContainer" parent="TerminalUI"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="ModeSwitcher" type="Control" parent="TerminalUI/MainLayout"]
+layout_mode = 2
+
+[node name="PhysicalCasing" type="CanvasLayer" parent="."]
+layer = 128
+
+[node name="TopLid" type="TextureRect" parent="PhysicalCasing"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="DayCounterText" type="Label" parent="PhysicalCasing"]
+offset_left = 24.0
+offset_top = 16.0
+offset_right = 224.0
+offset_bottom = 42.0
+text = "DAY 1"
+
+[node name="StateAnimator" type="AnimationPlayer" parent="."]
