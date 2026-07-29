@@ -28,11 +28,54 @@ endings, the dossier UI, any Phase 4–5 content, art, audio beyond one lid clac
 The slice is an experiment with a yes/no result, not a foundation. Adding to it delays the
 only question that matters.
 
+## Where things are
+
+```
+autoload/     clock.gd  game_state.gd  signal_bus.gd   (loaded in that order)
+sim/          tuning.gd  actions.gd  vitals.gd         (no nodes; pure rules and data)
+scripts/      game_root, terminal_panel, vital_gauge, round_button,
+              pressure_halo_overlay, debug_overlay
+shaders/      pressure_halo.gdshader
+scenes/       main.tscn
+```
+
+`Clock` emits `tick`; `GameState` is the only thing that writes `data`; everything in
+`scripts/` is presentation and may read state but never write it. Player input lands in a
+transient inbox that the tick drains — that is what keeps the no-mutation rule true even
+with lag queues in play.
+
+## The vitals model, in one paragraph
+
+Both vitals are **second-order**: a value and a velocity, acted on by *gravity* (a pull
+toward a rest point) and *momentum* (velocity persists, so nothing lands on the frame it is
+pressed). Core temperature is pulled toward the **place's ambient**; neural static is always
+pulled toward **100%**, with the place setting how hard. The two are **independent** — one
+tool each, coolant and damper. Actions push velocity, never a value.
+
+Static is brain activity: 100% is seizure, 0% is silence, and roughly **10–30% is the only
+functional band**. Degradation begins at each edge of that band — pressing too hard above
+it, too light below.
+
+## Tuning
+
+Every balance number lives in `sim/tuning.gd`. The consts are documented defaults;
+**`Tuning.live` is what the sim actually reads**, and the debug panel's sliders write to it
+at runtime, so a change bites immediately. `Actions.spec()` rebuilds from `live` on every
+call for the same reason.
+
+**Balance is validated against a human-paced policy** — half-second reactions, threshold
+responses — never an optimal bot. A bot proves nothing about whether a person can hold the
+band. Current target: neglect kills in ~4 minutes, holding the band costs about one press
+every 3 seconds.
+
 ## Inviolables
 
 - **The terminal constraint.** Everything the player sees is on the device screen. No
   cutscenes, no character views, no third-person, not even for the ending. One break costs
   the illusion. Do not propose otherwise.
+- **Degradation is motor, never perceptual.** No hallucinations, no false readings. The
+  instruments never lie — a device that lies is one the player stops reading, and reading it
+  is the entire game.
 - **No state mutation outside a `Clock` tick.** `Clock` runs a fixed-step ~10 Hz sim tick
   decoupled from framerate. All state lives in one serializable object and advances by
   replaying N ticks. This is what makes offline progress a later feature instead of a
@@ -67,11 +110,17 @@ the consumer rather than the cause.
 
 To drive the sim headless, run a scene positionally: `godot --headless --path . res://x.tscn`.
 Autoloads load normally, so this is how to check that `Clock` actually advances state
-without involving a browser.
+without involving a browser. **This is the right way to verify balance changes** — drive
+`GameState._on_tick()` directly with a scripted policy and assert on the outcome.
 
 **Always wrap that in `timeout 60`.** If the probe script fails to parse, the scene never
 loads, nothing ever calls `get_tree().quit()`, and Godot sits headless forever — the visible
 symptom is a hung command, not the parse error that caused it.
+
+⚠ **Do not model the sim twice.** Balance work is tempting to prototype in Python, and it is
+much faster to iterate that way, but a shadow model silently drifts from the GDScript and
+then you are tuning fiction. If a scratch model is used to explore, the result must be
+reproduced against the real sim headless before it is believed.
 
 To check the export in a browser: `cd build && python3 -m http.server 8777`, then open
 `http://localhost:8777/index.html`. The Web preset is built **without thread support**, so
@@ -99,6 +148,11 @@ missed both.
 
 ## What an agent cannot judge
 
-Whether interface degradation (input lag, button drift, halo smear) reads as *the
-character is failing* or as *the build is broken* is a human call, and it decides the
-project. Same for the M6 gate. Build the model; do not pronounce on the feel.
+Whether interface degradation reads as *the character is failing* or as *the build is
+broken* is a human call, and it decides the project. Same for the M6 gate. Build the model;
+do not pronounce on the feel.
+
+This has already bitten once and the lesson generalises: **tremor was built, simulated,
+verified correct, and was simply not fun.** No amount of headless validation would have
+caught that. Numbers can prove a mechanic *works*; only a person can say whether it is worth
+having. When a change is about feel, ship the dials and let the human turn them.
