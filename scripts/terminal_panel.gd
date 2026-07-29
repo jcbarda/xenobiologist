@@ -7,11 +7,9 @@ extends VBoxContainer
 ## This is presentation only. It reads GameState every frame and never writes;
 ## pressing a button records an intent that the next Clock tick resolves.
 
-const _BUTTON_FONT_SIZE := 18
-const _BUTTON_SIZE := Vector2(200, 56)
-const _BUTTON_GAP := 12.0
+const _BUTTON_GAP := 34.0
 ## Room around the row for buttons to wander into without clipping.
-const _TREMOR_MARGIN := 40.0
+const _TREMOR_MARGIN := 44.0
 const _REFUSAL_HOLD_SECONDS := 1.1
 
 var _temp_gauge: VitalGauge
@@ -38,8 +36,9 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	var data: Dictionary = GameState.data
+	GameState.viewport_size = get_viewport_rect().size
 	_refusal_timer = maxf(0.0, _refusal_timer - delta)
-	_apply_tremor()
+	_apply_tremor(delta)
 	_refresh_hardware_line()
 	_temp_gauge.display(data.core_temperature, data.temp_velocity)
 	_static_gauge.display(data.neural_static * 100.0, data.static_velocity)
@@ -49,14 +48,10 @@ func _process(delta: float) -> void:
 	# makes a bare reading a lie -- 30% settling toward 90% is an emergency and
 	# looks identical to 30% settling toward 10% -- and pairing each symptom with
 	# the cause driving it is RISK-1's mitigation.
+	var here: Dictionary = GameState.place()
 	_context_line.text = (
-		"AMBIENT %.0f C -> body pulled toward it   |   "
-		+ "at %.1f C static settles toward %.0f %%"
-	) % [
-		data.ambient_temperature,
-		data.core_temperature,
-		Tuning.static_rest_point(data.core_temperature) * 100.0,
-	]
+		"%s -- pulling core temp toward %.0f C, static toward %.0f %%"
+	) % [here.label, here.temperature, here.static * 100.0]
 
 	for action_id: StringName in _buttons:
 		var button: Button = _buttons[action_id]
@@ -140,23 +135,22 @@ func _build_actions() -> void:
 	add_child(spacer)
 
 	_action_row = Control.new()
-	_action_row.custom_minimum_size = Vector2(0, _BUTTON_SIZE.y + _TREMOR_MARGIN * 2.0)
+	_action_row.custom_minimum_size = Vector2(
+		0, RoundButton.DIAMETER + _TREMOR_MARGIN * 2.0
+	)
 	add_child(_action_row)
 
 	var index := 0
 	for action_id in Actions.available():
 		var action: Dictionary = Actions.spec(action_id)
-		var button := Button.new()
+		var button := RoundButton.new()
 		button.text = action.label
-		button.size = _BUTTON_SIZE
-		button.add_theme_font_size_override("font_size", _BUTTON_FONT_SIZE)
-		button.tooltip_text = _describe_cost(action)
+		button.tooltip_text = "%s -- %s" % [action.caption, _describe_cost(action)]
 		button.set_meta("home", Vector2(
-			index * (_BUTTON_SIZE.x + _BUTTON_GAP), _TREMOR_MARGIN
+			index * (RoundButton.DIAMETER + _BUTTON_GAP), _TREMOR_MARGIN
 		))
-		# Each button gets its own phase so they twitch independently -- a row
-		# moving in unison reads as the camera shaking, not as a hand.
-		button.set_meta("phase", float(index) * 2.399)
+		button.set_meta("offset", Vector2.ZERO)
+		button.set_meta("dwell", 0.0)
 		button.position = button.get_meta("home")
 		button.pressed.connect(_on_action_pressed.bind(action_id))
 		_action_row.add_child(button)
@@ -164,29 +158,37 @@ func _build_actions() -> void:
 		index += 1
 
 
-## The buttons genuinely move, so a miss is a real miss against real geometry --
-## the player's aim was beaten by a hand that will not hold still, rather than by
-## a hidden dice roll. Nothing here writes state.
-func _apply_tremor() -> void:
+## Tremor holds still, then jumps -- it does not glide.
+##
+## Smooth motion reads as the whole panel swaying, which a player tracks without
+## thinking about it and which looks like a screen effect. Discrete jumps read as
+## a hand that will not stay where it was put, and they genuinely defeat aiming,
+## because the button is simply somewhere else by the time the click lands.
+func _apply_tremor(delta: float) -> void:
 	var amplitude := GameState.tremor_pixels()
-	var t := float(Time.get_ticks_msec()) / 1000.0
 	for action_id: StringName in _buttons:
 		var button: Button = _buttons[action_id]
-		var phase: float = button.get_meta("phase")
 		var home: Vector2 = button.get_meta("home")
-		button.position = home + Vector2(
-			_twitch(t, phase) * amplitude,
-			_twitch(t * 1.17, phase + 4.1) * amplitude * 0.7,
-		)
 
+		if amplitude <= 0.0:
+			button.set_meta("offset", Vector2.ZERO)
+			button.position = home
+			continue
 
-## Two detuned sines: fast enough to read as tremor, irrational enough in ratio
-## that it never settles into a visible loop. Range is about [-1, 1].
-func _twitch(t: float, phase: float) -> float:
-	return (
-		0.6 * sin(t * Tuning.TREMOR_JITTER_HZ + phase)
-		+ 0.4 * sin(t * Tuning.TREMOR_JITTER_HZ * 2.37 + phase * 1.7)
-	)
+		var dwell: float = button.get_meta("dwell") - delta
+		if dwell <= 0.0:
+			# Jump somewhere new, and hold there for a beat. Shorter holds as
+			# things get worse, so the twitching quickens rather than widens.
+			var settle := Tuning.degradation(GameState.data.neural_static)
+			dwell = randf_range(
+				Tuning.TREMOR_DWELL_MIN,
+				lerpf(Tuning.TREMOR_DWELL_MAX, Tuning.TREMOR_DWELL_MIN, settle),
+			)
+			button.set_meta("offset", Vector2(
+				randf_range(-1.0, 1.0), randf_range(-1.0, 1.0) * 0.7
+			) * amplitude)
+		button.set_meta("dwell", dwell)
+		button.position = home + button.get_meta("offset")
 
 
 func _on_action_pressed(action_id: StringName) -> void:
@@ -213,12 +215,46 @@ func _describe_cost(action: Dictionary) -> String:
 
 func _build_status_line() -> void:
 	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, 18)
+	spacer.custom_minimum_size = Vector2(0, 10)
 	add_child(spacer)
 
 	_status_line = Label.new()
 	_status_line.add_theme_font_size_override("font_size", 22)
 	add_child(_status_line)
+
+	var controls := HBoxContainer.new()
+	controls.add_theme_constant_override("separation", 10)
+	add_child(controls)
+
+	var reset := Button.new()
+	reset.text = "RESET RUN"
+	reset.custom_minimum_size = Vector2(130, 34)
+	reset.pressed.connect(_on_reset_pressed)
+	controls.add_child(reset)
+
+	# A plain button, not a toggle. `toggled` did not fire in the exported web
+	# build even though `pressed` on the identical layout did; rather than chase
+	# that, this uses the path already known to work.
+	var debug := Button.new()
+	debug.text = "DEBUG"
+	debug.custom_minimum_size = Vector2(100, 34)
+	debug.pressed.connect(func() -> void: SignalBus.debug_toggle_requested.emit())
+	controls.add_child(debug)
+
+	var quit := Button.new()
+	quit.text = "EXIT"
+	quit.custom_minimum_size = Vector2(90, 34)
+	quit.pressed.connect(func() -> void: get_tree().quit())
+	controls.add_child(quit)
+
+
+## Deliberately NOT routed through the bloom/lag machinery. These are controls on
+## the case, not contacts on the pressure screen -- a player who has lost enough
+## motor control to be unable to press RESET would have no way out at all.
+func _on_reset_pressed() -> void:
+	GameState.request_reset()
+	_status_line.text = ""
+	_refusal_timer = 0.0
 
 
 func _on_blackout(cause: String) -> void:

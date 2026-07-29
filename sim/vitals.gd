@@ -41,11 +41,16 @@ const BAND_LABEL := {
 ## Each entry is {"until": upper bound (exclusive), "band": Band}. The last entry
 ## must use INF so classification always terminates.
 
-## Collapse is at 41.0. The deadly band opens at 39.5 so the player gets a warning
-## band to act inside rather than a threshold that is crossed and then fatal.
+## The gauge ENDS at collapse. Running out of bar is death, with no leftover
+## track past the fatal point -- a marker with visible room ahead of it promises
+## time the player does not have, and dying with bar to spare reads as the game
+## cheating rather than as the player misjudging.
+##
+## The deadly band still opens well before the end (39.5) so there is a warning
+## zone to act inside.
 const CORE_TEMP := {
-	"min": 28.0,
-	"max": 42.0,
+	"min": 30.0,
+	"max": 41.0,
 	"bands": [
 		{"until": 30.0, "band": Band.HYPO_DEADLY},
 		{"until": 35.0, "band": Band.HYPO_TOLERABLE},
@@ -76,12 +81,15 @@ const NEURAL_STATIC := {
 ## Water is a reserve, so its danger is entirely on the low side. It uses the
 ## hypo colours rather than red for the same reason: running dry is a different
 ## problem from overheating, and should not look like one.
+##
+## Bounds come from Tuning so the gauge cannot silently disagree with the tank --
+## they did once, and a full canteen read as LOW at half the bar.
 const WATER := {
 	"min": 0.0,
-	"max": 12.0,
+	"max": float(Tuning.WATER_CAPACITY),
 	"bands": [
-		{"until": 3.0, "band": Band.HYPO_DEADLY},
-		{"until": 6.0, "band": Band.HYPO_TOLERABLE},
+		{"until": 1.0, "band": Band.HYPO_DEADLY},
+		{"until": 3.0, "band": Band.HYPO_TOLERABLE},
 		{"until": INF, "band": Band.COMFORTABLE},
 	],
 }

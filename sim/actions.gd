@@ -28,10 +28,11 @@ const CATALOGUE := {
 	# the rest. Slow, because thermal inertia is high, so it must be pressed
 	# before the player feels they need it.
 	FLUSH_COOLANT: {
-		"label": "FLUSH COOLANT",
-		"water": -2,
-		"temp_impulse": -0.55,
-		"exertion": 0.02,
+		"label": "FLUSH",
+		"caption": "COOLANT",
+		"water": -1,
+		"temp_impulse": -0.60,
+		"exertion": 0.005,
 		"damping": 0.0,
 		"brake": 0.0,
 	},
@@ -39,11 +40,12 @@ const CATALOGUE := {
 	# but cannot get beneath the rest point core temperature dictates -- so it
 	# buys seconds, never a cure. Leaning on it instead of cooling is the trap.
 	NEURAL_DAMPER: {
-		"label": "NEURAL DAMPER",
-		"water": -2,
+		"label": "DAMP",
+		"caption": "NEURAL",
+		"water": -1,
 		"temp_impulse": 0.0,
 		"exertion": 0.0,
-		"damping": 0.08,
+		"damping": 0.16,
 		"brake": Tuning.DAMPER_BRAKE,
 	},
 	# Renews the chokepoint. It is physical labour, so it is almost entirely a
@@ -51,10 +53,11 @@ const CATALOGUE := {
 	# of situational stress. Hauling water in the heat is what makes the treadmill
 	# self-limiting: run it fast enough to suppress static and you cook.
 	DRAW_WATER: {
-		"label": "DRAW WATER",
-		"water": Tuning.WATER_PER_DRAW,
-		"temp_impulse": 0.35,
-		"exertion": 0.02,
+		"label": "DRAW",
+		"caption": "WATER",
+		"water": 1,
+		"temp_impulse": 0.08,
+		"exertion": 0.005,
 		"damping": 0.0,
 		"brake": 0.0,
 	},

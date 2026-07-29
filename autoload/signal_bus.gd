@@ -16,6 +16,11 @@ signal action_resolved(action_id: StringName)
 ## this only announces it.
 signal day_advanced(day: int)
 
+## Developer state dump asked to flip. Carries no state deliberately: the button
+## and the overlay disagreeing about who is authoritative is what made the
+## earlier toggle-mode version look broken.
+signal debug_toggle_requested
+
 ## The sim has halted because the player went under. `cause` is the vital that
 ## gave out, so the panel can name it -- pairing symptom with cause is RISK-1's
 ## mitigation and matters more here than anywhere else. M5 slams the lid on this.

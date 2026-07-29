@@ -2,181 +2,139 @@ class_name Tuning
 extends RefCounted
 ## Every balance number in the slice, in one place.
 ##
-## The vitals are second-order: each has a value and a velocity. Two forces act
-## on them.
+## The vitals are second-order: each has a value and a velocity, acted on by
+## gravity (a pull toward a rest point) and momentum (velocity persists, so
+## nothing lands on the frame it is pressed).
 ##
-##   Gravity  -- a pull toward a rest point. Core temperature's rest point is
-##               whatever the PLACE is: 35C in the cave, 46C at the oasis edge,
-##               75C on open surface. Static's rest point is set by body heat --
-##               a stressed body drives toward total overload, a cool resting one
-##               sheds it.
-##   Momentum -- velocity persists, so nothing responds instantly. Panic
-##               overshoots and takes time to bleed off; relief arrives late.
+## **Core temperature and neural static are independent.** Each is pulled toward
+## a rest point fixed by the PLACE the player is standing in, and neither reads
+## the other. Two separate control loops with one tool each: coolant for heat,
+## the damper for static. An earlier build derived static's rest point from body
+## heat; it made every number interlock with every other and was much harder to
+## hold, reason about, or tune.
 ##
-## This is what stops static being a bar the player can simply clear. Actions
-## push velocity, never the value, so the only durable way to lower static is to
-## lower core temperature and move the rest point underneath it.
+## Consequence worth remembering: **a location can only kill by heat if its
+## ambient exceeds CORE_TEMP_COLLAPSE.** Below that, temperature simply converges
+## to ambient and sits there. The cave is survivable indefinitely for exactly
+## this reason, and it is not an accident -- it is the definition of shelter.
 ##
-## It also means the excursion budget in M4 needs no timer of its own: how long
-## the player can survive somewhere simply IS that location's ambient temperature
-## working against their thermal inertia.
-##
-## The derivations below record what each value was aiming at, so a change can be
-## judged against its intent. They are not claims the intent is correct.
+## Tuned for a person to hold, not a bot to optimise: a human-paced policy
+## (half-second reactions, threshold responses) holds the functional band at
+## about one press every 3.7 seconds, and neglect kills in ~4 minutes.
 
 # --- Core temperature -------------------------------------------------------
 
 const CORE_TEMP_START := 37.0
 const CORE_TEMP_COLLAPSE := 41.0
 
-## Ambient is a property of the PLACE, and it is what the body is dragged toward.
-## Unmitigated survival time falls straight out of it: indefinite in the cave,
-## ~172s at the oasis edge, ~33s on open surface.
-##
-## Only OASIS_EDGE is reachable in the slice -- Phase 0 happens there. The other
-## two are the endpoints M4's excursions will run between, recorded here because
-## they are what set the shape of the curve, not because anything uses them yet.
-const AMBIENT_CAVE := 35.0
-const AMBIENT_OASIS_EDGE := 46.0
-const AMBIENT_OPEN_SURFACE := 75.0
-
-## Pull toward ambient.
-const TEMP_GRAVITY := 0.0075
-
-## Thermal inertia. High, so temperature glides rather than snapping -- a coolant
-## flush is felt over several seconds, not on the frame it is pressed.
+## Pull toward ambient, and thermal inertia. Friction is high, so temperature
+## glides -- a flush is felt over seconds, not on the frame it is pressed.
+const TEMP_GRAVITY := 0.0050
 const TEMP_FRICTION := 1.8
 
 # --- Neural static ----------------------------------------------------------
 
 ## Static is the level of brain activity. 100% is everything firing at once --
-## seizure. 0% is silence -- braindead. Neither end is survivable, and roughly
-## 10-30% is the band a person actually functions in.
-##
-## Stored 0..1 and displayed as a percentage. Normalised because M2's lag, drift
-## and halo curves all want a 0..1 driver.
+## seizure. 0% is silence -- braindead. Roughly 10-30% is the band a person
+## actually functions in, and it is the narrowest safe range in the game.
 const STATIC_SEIZURE := 1.0
 const STATIC_SILENCE := 0.02
 
-## Resting brain activity. Static settles here when the body is calm, which is
-## why it is also the value a run starts at -- nobody boots at zero.
+## Resting brain activity, and where a run starts. Nobody boots at zero.
 const STATIC_BASELINE := 0.15
 
-## Static drives to 100% when the body is stressed and falls back to
-## STATIC_BASELINE when it is cool and resting -- not to zero, because zero is
-## death. This mapping is the spine of the model: it is why cooling is the real
-## treatment, why the damper is only ever a stopgap, and why the cave is a refuge
-## rather than merely a cooler place to die.
-##
-## CALM sits at normal body temperature, so holding the functional 10-30% band
-## means holding core temperature within about half a degree of 37. That is a
-## demanding target, and it is what keeps FLUSH COOLANT the constant activity.
-##
-## It is also load-bearing against RISK-6. Tried and rejected: pinning the rest
-## point at 100% unconditionally. It reads well ("static always wants to win")
-## but it leaves the damper as the ONLY downward force, which makes every action's
-## cognitive load permanent -- and then doing nothing outlives playing well
-## (172s vs 81s, measured). Paralysis must never be the optimal strategy.
-const STATIC_CALM_TEMP := 37.0
-const STATIC_STRESS_TEMP := 40.0
-
-const STATIC_GRAVITY := 0.055
+const STATIC_GRAVITY := 0.014
 const STATIC_FRICTION := 1.1
 
-## OQ-1, decided 2026-07-28: cognitive load is a flat per-action cost. Every
-## action pays it regardless of what it is, so frantic clicking is
-## self-punishing. Now applied as a velocity impulse rather than a value delta.
-##
-## It is also what makes the damper's brake self-limiting: braking is only worth
-## the press when static is climbing faster than COGNITIVE_LOAD / DAMPER_BRAKE.
-const COGNITIVE_LOAD := 0.05
+## OQ-1: cognitive load is a flat per-action cost, so frantic clicking is
+## self-punishing. Small, because it is paid on EVERY press -- including the
+## draws that fund the other presses -- and a large value made deliberate play
+## lose to sitting still.
+const COGNITIVE_LOAD := 0.020
 
-## Fraction of static velocity a damper removes. A brake cannot push static below
-## its rest point, so it can never be run as an engine.
-const DAMPER_BRAKE := 0.60
+## Fraction of static velocity a damper removes, on top of its push.
+const DAMPER_BRAKE := 0.50
+
+# --- Places -----------------------------------------------------------------
+
+## Each location fixes BOTH rest points. Only OASIS_EDGE is reachable in the
+## slice; the other two are the endpoints M4's excursions will run between,
+## recorded because they set the shape of the curve.
+##
+## Static ambient is what the place does to a nervous system, independent of
+## heat: the cave is restful and sits inside the functional band, the oasis edge
+## sits just above it, open surface is punishing.
+const PLACES := {
+	&"cave": {"label": "CAVE", "temperature": 35.0, "static": 0.15},
+	&"oasis_edge": {"label": "OASIS EDGE", "temperature": 46.0, "static": 0.38},
+	&"open_surface": {"label": "OPEN SURFACE", "temperature": 60.0, "static": 0.75},
+}
+
+const STARTING_PLACE := &"oasis_edge"
 
 # --- Water ------------------------------------------------------------------
 
-## Water is the universal chokepoint (design-doc 4.7): every action spends it or
-## fetches it, and the stabilisers compete for the same reserve.
-const WATER_START := 10
-const WATER_CAPACITY := 12
-
-## What stops the water treadmill becoming a "static engine" -- a loop that
-## refunds more calm than it costs, letting a fast clicker hold a clean interface
-## forever and deleting the degradation M2 exists to test.
+## Water is the universal chokepoint (design-doc 4.7). Deliberately a small,
+## legible economy: one press draws one unit, and every other action spends one.
 ##
-## This guard MOVED when DRAW WATER became physical labour. It used to be
-## arithmetic: draw exertion had to exceed what the water bought back in damping.
-## Now that drawing is thermally expensive and nearly free in static, that
-## inequality no longer binds -- the guard is physical instead. Running the loop
-## fast enough to suppress static means drawing fast enough to cook yourself, and
-## the flushes needed to survive that cost cognitive load of their own.
-##
-## Verified adversarially rather than assumed: a policy built specifically to run
-## the engine dies either way -- seizure at 175s in the cave (cognitive load of
-## ~1500 actions), heat at 157s at the oasis edge.
-##
-## So the number to watch when tuning is DRAW_WATER's temp_impulse. Drop it far
-## and the engine reopens.
-const WATER_PER_DRAW := 6
+## That means roughly half of all clicking is logistics -- each useful press
+## needs a second press to pay for it, and that draw costs cognitive load and
+## heat of its own. It is the single biggest driver of how busy the game feels.
+const WATER_START := 4
+const WATER_CAPACITY := 6
 
 # --- Interface degradation (M2) ---------------------------------------------
 
 ## Degradation begins where the functional band ends. Inside 10-30% the player
 ## has full control; leaving the band is what costs them their hands. Tying the
-## onset to the band means the gauge already explains the symptom -- the player
-## can see they are outside nominal at the moment control starts slipping, which
-## is RISK-1's pair-the-symptom-with-its-cause built into the numbers rather than
-## bolted on.
+## onset to the band means the gauge is already explaining the symptom at the
+## moment control starts slipping.
 const DEGRADATION_ONSET := 0.30
 
-## Strain, not confusion. The command is late leaving the body -- it is never
-## wrong, and it is never dropped. See design-doc 4.1: no hallucinations, no
-## false readings, and the instruments never lie.
+## Strain, not confusion. The command is late leaving the body -- never wrong,
+## never dropped. See design-doc 4.1: no hallucinations, no false readings.
 const MOTOR_LAG_MAX_SECONDS := 0.65
 
-## Tremor. The buttons genuinely move, so a miss is a real miss against real
-## geometry rather than a rolled failure -- the player's aim was simply beaten by
-## a hand that will not hold still.
-const TREMOR_MAX_PIXELS := 26.0
-const TREMOR_JITTER_HZ := 7.0
+## Tremor. The buttons genuinely move, so a miss is real geometry rather than a
+## rolled failure. Erratic by design: it holds still, then jumps.
+const TREMOR_MAX_PIXELS := 30.0
+const TREMOR_DWELL_MIN := 0.05
+const TREMOR_DWELL_MAX := 0.30
 
 ## Contact bloom: pressing too hard leaves a negative halo burned into the
 ## pressure layer, and the panel will not read a second contact inside it until
-## it clears. Overpressure is itself a symptom of strain, so mashing one button
-## blinds exactly the spot you keep hitting.
-const HALO_RADIUS_PIXELS := 96.0
-const HALO_HOLD_SECONDS_MIN := 0.35
-const HALO_HOLD_SECONDS_MAX := 2.4
+## it clears. Mashing one button blinds the spot you keep hitting.
+const HALO_RADIUS_PIXELS := 68.0
+const HALO_HOLD_SECONDS_MIN := 0.30
+const HALO_HOLD_SECONDS_MAX := 2.2
 
-## Shader slot count. Older presses are dropped rather than queued -- the newest
-## contact is the one the player is about to be blocked by.
-const HALO_MAX_ACTIVE := 8
+## A failing hand does not land once, cleanly. At high degradation a single
+## press also drags (a slide) and puts down stray contacts elsewhere -- which
+## bloom over whatever was behind them.
+const SLIDE_CHANCE := 0.9
+const SLIDE_DISTANCE_PIXELS := 90.0
+const STRAY_CONTACT_CHANCE := 0.7
 
-
-## 0 inside the functional band, ramping to 1 at seizure. Every degradation
-## reads from this so they all worsen together and share one cause.
-static func degradation(neural_static: float) -> float:
-	var span := STATIC_SEIZURE - DEGRADATION_ONSET
-	return clampf((neural_static - DEGRADATION_ONSET) / span, 0.0, 1.0)
-
+const HALO_MAX_ACTIVE := 12
 
 # --- Loop shape -------------------------------------------------------------
 
-## Flip to false to cut DRAW WATER out of the loop entirely -- the action is
-## dropped from the catalogue and its button never appears.
+## Flip to false to cut DRAW WATER out of the loop entirely -- the action leaves
+## the catalogue and its button never appears.
 ##
 ## true  -> treadmill. Water is renewable, so Phase 0 runs until the player
-##          misjudges the exertion cost of fetching it.
+##          misjudges the heat cost of fetching it.
 ## false -> countdown. A fixed canteen, allocation is the only agency, and the
 ##          run is always eventually fatal.
 const DRAW_WATER_ENABLED := true
 
 
-## Where static settles for a given body temperature. Gravity pulls toward this,
-## so it is the level no amount of dampering gets under.
-static func static_rest_point(core_temperature: float) -> float:
-	var span := STATIC_STRESS_TEMP - STATIC_CALM_TEMP
-	var stress := clampf((core_temperature - STATIC_CALM_TEMP) / span, 0.0, 1.0)
-	return lerpf(STATIC_BASELINE, 1.0, stress)
+## 0 inside the functional band, ramping to 1 at seizure. Every degradation reads
+## from this, so they worsen together and share one visible cause.
+static func degradation(neural_static: float) -> float:
+	var span := STATIC_SEIZURE - DEGRADATION_ONSET
+	return clampf((neural_static - DEGRADATION_ONSET) / span, 0.0, 1.0)
+
+
+static func place(place_id: StringName) -> Dictionary:
+	return PLACES[place_id]

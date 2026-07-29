@@ -22,6 +22,25 @@ var data: Dictionary = {}
 ## Entries are {"action": String, "x": float, "y": float}.
 var _inbox: Array[Dictionary] = []
 
+## Set by UI, consumed by the next tick. Starting a new run is not advancing the
+## sim, but routing it through the tick keeps "data is written in exactly one
+## place" true without exception.
+var _reset_requested := false
+
+## Screen bounds, so stray contacts land somewhere real. Presentation supplies
+## it; the sim only reads it.
+var viewport_size := Vector2(1280, 720)
+
+
+## Deterministic, and advanced through `data`, so a saved run reproduces the same
+## scatter when replayed.
+func _next_random() -> float:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(data.rng_seed)
+	var value := rng.randf()
+	data.rng_seed = rng.randi()
+	return value
+
 
 func _ready() -> void:
 	reset()
@@ -41,9 +60,12 @@ func reset() -> void:
 		"temp_velocity": 0.0,
 		"static_velocity": 0.0,
 		"water": Tuning.WATER_START,
-		# Ambient heat of wherever the player is. Phase 0 happens at the oasis
-		# edge; M4 will move this, and moving it is the entire excursion budget.
-		"ambient_temperature": Tuning.AMBIENT_OASIS_EDGE,
+		# Where the player is standing. The place fixes BOTH rest points, and
+		# moving it is the whole of M4's excursion budget.
+		"place": String(Tuning.STARTING_PLACE),
+		# Seeded so a run replays identically from its state, including the
+		# scatter of stray contacts. Advanced in place every time it is used.
+		"rng_seed": 20260729,
 		# Listed in design-doc 4.1 as a vital but deliberately inert for the
 		# slice: section 8 names two clocks, and a third would blur the read.
 		"hydration": 1.0,
@@ -62,6 +84,15 @@ func reset() -> void:
 
 func is_blacked_out() -> bool:
 	return data.blackout_cause != ""
+
+
+## Queues a fresh run. Applied by the next tick, not here.
+func request_reset() -> void:
+	_reset_requested = true
+
+
+func place() -> Dictionary:
+	return Tuning.place(StringName(data.place))
 
 
 ## Called from UI on a press. Records the raw contact only -- the tick decides
@@ -127,6 +158,11 @@ func can_afford(action_id: StringName) -> bool:
 
 
 func _on_tick(sim_delta: float) -> void:
+	# Before the blackout gate, so a reset can revive a run that has ended.
+	if _reset_requested:
+		_reset_requested = false
+		reset()
+		return
 	if is_blacked_out():
 		return
 	data.ticks_elapsed += 1
@@ -147,17 +183,46 @@ func _accept_contacts() -> void:
 			"action": contact.action,
 			"ticks": delay_ticks,
 		})
-		if data.halos.size() >= Tuning.HALO_MAX_ACTIVE:
-			data.halos.pop_front()
-		var hold_ticks := int(round(bloom_hold_seconds() / Clock.TICK_SECONDS))
-		data.halos.append({
-			"x": contact.x,
-			"y": contact.y,
-			"radius": Tuning.HALO_RADIUS_PIXELS,
-			"ticks": hold_ticks,
-			"total": maxi(hold_ticks, 1),
-		})
+		_burn_contacts(Vector2(contact.x, contact.y))
 	_inbox.clear()
+
+
+## A failing hand does not land once, cleanly.
+##
+## At high degradation the finger drags before it settles (a slide), and other
+## fingers put down stray contacts elsewhere on the glass. Every one of those
+## blooms, and every bloom both hides what is behind it and refuses presses
+## inside it -- so a bad press can blind a control the player was not even
+## reaching for.
+func _burn_contacts(origin: Vector2) -> void:
+	var wobble := Tuning.degradation(data.neural_static)
+	_burn_one(origin)
+	if wobble <= 0.0:
+		return
+
+	if _next_random() < Tuning.SLIDE_CHANCE * wobble:
+		var angle := _next_random() * TAU
+		var reach := Tuning.SLIDE_DISTANCE_PIXELS * wobble * (0.4 + _next_random() * 0.6)
+		_burn_one(origin + Vector2.from_angle(angle) * reach)
+
+	if _next_random() < Tuning.STRAY_CONTACT_CHANCE * wobble:
+		_burn_one(Vector2(
+			_next_random() * viewport_size.x,
+			_next_random() * viewport_size.y,
+		))
+
+
+func _burn_one(at: Vector2) -> void:
+	if data.halos.size() >= Tuning.HALO_MAX_ACTIVE:
+		data.halos.pop_front()
+	var hold_ticks := int(round(bloom_hold_seconds() / Clock.TICK_SECONDS))
+	data.halos.append({
+		"x": at.x,
+		"y": at.y,
+		"radius": Tuning.HALO_RADIUS_PIXELS,
+		"ticks": hold_ticks,
+		"total": maxi(hold_ticks, 1),
+	})
 
 
 func _age_blooms() -> void:
@@ -203,17 +268,19 @@ func _resolve_ready_inputs() -> void:
 ## Second-order integration: gravity accelerates each vital toward its rest
 ## point, friction bleeds the velocity off, and the value follows the velocity.
 func _advance_vitals(sim_delta: float) -> void:
-	# Core temperature is dragged toward wherever the player is standing.
+	# Both vitals are dragged toward the place the player is standing in, and
+	# neither reads the other. Two independent loops, one tool each.
+	var here: Dictionary = place()
+
 	data.temp_velocity += (
-		Tuning.TEMP_GRAVITY * (data.ambient_temperature - data.core_temperature) * sim_delta
+		Tuning.TEMP_GRAVITY * (here.temperature - data.core_temperature) * sim_delta
 	)
 	data.temp_velocity -= data.temp_velocity * Tuning.TEMP_FRICTION * sim_delta
 	data.core_temperature += data.temp_velocity * sim_delta
 
-	# Static settles wherever body heat says it should. This is the coupling that
-	# makes cooling the only durable treatment.
-	var rest: float = Tuning.static_rest_point(data.core_temperature)
-	data.static_velocity += Tuning.STATIC_GRAVITY * (rest - data.neural_static) * sim_delta
+	data.static_velocity += (
+		Tuning.STATIC_GRAVITY * (here.static - data.neural_static) * sim_delta
+	)
 	data.static_velocity -= data.static_velocity * Tuning.STATIC_FRICTION * sim_delta
 	data.neural_static = clampf(
 		data.neural_static + data.static_velocity * sim_delta, 0.0, Tuning.STATIC_SEIZURE
