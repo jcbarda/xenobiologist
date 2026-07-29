@@ -21,6 +21,7 @@ var _status_line: Label
 var _action_row: Control
 var _buttons: Dictionary = {}
 var _refusal_timer := 0.0
+var _refusal_reason := &""
 
 
 func _ready() -> void:
@@ -38,7 +39,7 @@ func _process(delta: float) -> void:
 	var data: Dictionary = GameState.data
 	GameState.viewport_size = get_viewport_rect().size
 	_refusal_timer = maxf(0.0, _refusal_timer - delta)
-	_apply_tremor(delta)
+	_apply_contact_fade()
 	_refresh_hardware_line()
 	_temp_gauge.display(data.core_temperature, data.temp_velocity)
 	_static_gauge.display(data.neural_static * 100.0, data.static_velocity)
@@ -50,8 +51,8 @@ func _process(delta: float) -> void:
 	# the cause driving it is RISK-1's mitigation.
 	var here: Dictionary = GameState.place()
 	_context_line.text = (
-		"%s -- pulling core temp toward %.0f C, static toward %.0f %%"
-	) % [here.label, here.temperature, here.static * 100.0]
+		"%s -- pulling core temp toward %.0f C.  Static always climbs toward 100 %%."
+	) % [here.label, here.temperature]
 
 	for action_id: StringName in _buttons:
 		var button: Button = _buttons[action_id]
@@ -101,28 +102,43 @@ func _build_hardware_line() -> void:
 ## and are silent while the player is inside the functional band.
 func _refresh_hardware_line() -> void:
 	if _refusal_timer > 0.0:
-		_hardware_line.text = "CONTACT REFUSED -- pressure bloom has not cleared"
-		_hardware_line.add_theme_color_override(
-			"font_color", Vitals.BAND_COLOR[Vitals.Band.HYPER_DEADLY]
-		)
+		if _refusal_reason == GameState.REFUSED_BLOOM:
+			_hardware_line.text = "CONTACT REFUSED -- pressure bloom has not cleared"
+			_hardware_line.add_theme_color_override(
+				"font_color", Vitals.BAND_COLOR[Vitals.Band.HYPER_DEADLY]
+			)
+		else:
+			_hardware_line.text = "CONTACT TOO LIGHT -- panel did not register the press"
+			_hardware_line.add_theme_color_override(
+				"font_color", Vitals.BAND_COLOR[Vitals.Band.HYPO_DEADLY]
+			)
 		return
 
-	var lag := GameState.motor_lag_seconds()
-	var tremor := GameState.tremor_pixels()
-	var in_flight: int = GameState.data.input_queue.size()
+	var static_pct: float = GameState.data.neural_static * 100.0
+	var hyper := Tuning.hyper_degradation(GameState.data.neural_static)
+	var hypo := Tuning.hypo_degradation(GameState.data.neural_static)
 
-	if lag <= 0.0 and tremor <= 0.0:
+	if hyper <= 0.0 and hypo <= 0.0:
 		_hardware_line.text = "MOTOR CONTROL nominal   |   contact bloom %.1f s" % [
 			GameState.bloom_hold_seconds(),
 		]
 		_hardware_line.add_theme_color_override("font_color", Color("64748b"))
 		return
 
-	_hardware_line.text = (
-		"MOTOR LAG %d ms (%d in flight)   |   TREMOR %.0f px   |   BLOOM %.1f s"
-	) % [int(lag * 1000.0), in_flight, tremor, GameState.bloom_hold_seconds()]
+	if hyper > 0.0:
+		_hardware_line.text = "PRESSING TOO HARD   |   contact bloom %.1f s" % [
+			GameState.bloom_hold_seconds(),
+		]
+	else:
+		_hardware_line.text = (
+			"PRESSING TOO LIGHT   |   motor lag %d ms (%d in flight)   |   %d%% of contacts lost"
+		) % [
+			int(GameState.motor_lag_seconds() * 1000.0),
+			GameState.data.input_queue.size(),
+			int(GameState.light_press_miss_chance() * 100.0),
+		]
 	_hardware_line.add_theme_color_override(
-		"font_color", Vitals.color_for(GameState.data.neural_static * 100.0, Vitals.NEURAL_STATIC)
+		"font_color", Vitals.color_for(static_pct, Vitals.NEURAL_STATIC)
 	)
 
 
@@ -158,46 +174,30 @@ func _build_actions() -> void:
 		index += 1
 
 
-## Tremor holds still, then jumps -- it does not glide.
+## Keys fade as contact weakens.
 ##
-## Smooth motion reads as the whole panel swaying, which a player tracks without
-## thinking about it and which looks like a screen effect. Discrete jumps read as
-## a hand that will not stay where it was put, and they genuinely defeat aiming,
-## because the button is simply somewhere else by the time the click lands.
-func _apply_tremor(delta: float) -> void:
-	var amplitude := GameState.tremor_pixels()
+## The HYPO tell: below the functional band the player is pressing too lightly
+## for the panel to read, and some contacts simply do not land. Fading the keys
+## is what makes that legible in advance -- the player watches the controls go
+## faint and can see the next miss coming, instead of being told afterwards that
+## a press they thought they made never happened.
+func _apply_contact_fade() -> void:
+	var faintness := Tuning.hypo_degradation(GameState.data.neural_static)
+	var alpha := lerpf(1.0, Tuning.FADED_BUTTON_ALPHA, faintness)
 	for action_id: StringName in _buttons:
 		var button: Button = _buttons[action_id]
-		var home: Vector2 = button.get_meta("home")
-
-		if amplitude <= 0.0:
-			button.set_meta("offset", Vector2.ZERO)
-			button.position = home
-			continue
-
-		var dwell: float = button.get_meta("dwell") - delta
-		if dwell <= 0.0:
-			# Jump somewhere new, and hold there for a beat. Shorter holds as
-			# things get worse, so the twitching quickens rather than widens.
-			var settle := Tuning.degradation(GameState.data.neural_static)
-			dwell = randf_range(
-				Tuning.TREMOR_DWELL_MIN,
-				lerpf(Tuning.TREMOR_DWELL_MAX, Tuning.TREMOR_DWELL_MIN, settle),
-			)
-			button.set_meta("offset", Vector2(
-				randf_range(-1.0, 1.0), randf_range(-1.0, 1.0) * 0.7
-			) * amplitude)
-		button.set_meta("dwell", dwell)
-		button.position = home + button.get_meta("offset")
+		button.modulate = Color(1.0, 1.0, 1.0, alpha)
 
 
 func _on_action_pressed(action_id: StringName) -> void:
 	var contact := get_viewport().get_mouse_position()
-	if GameState.request_action(action_id, contact):
+	var outcome := GameState.request_action(action_id, contact)
+	if outcome == GameState.ACCEPTED:
 		return
-	# Refused because the contact landed inside a bloom that has not cleared.
-	# This MUST be said out loud: a press that silently does nothing reads as a
-	# broken build, which is RISK-1's failure mode exactly.
+	# A refusal MUST be said out loud, and it must say WHICH refusal: a press
+	# that silently does nothing reads as a broken build, which is RISK-1's
+	# failure mode exactly.
+	_refusal_reason = outcome
 	_refusal_timer = _REFUSAL_HOLD_SECONDS
 
 
@@ -208,7 +208,9 @@ func _describe_cost(action: Dictionary) -> String:
 		parts.append("TEMP %s" % ("cools" if action.temp_impulse < 0.0 else "heats"))
 	if action.brake > 0.0:
 		parts.append("arrests static's climb")
-	var net_static: float = Tuning.COGNITIVE_LOAD + action.exertion - action.damping
+	var net_static: float = (
+		float(Tuning.live.cognitive_load) + action.exertion - action.damping
+	)
 	parts.append("STATIC %+.0f%%/s" % (net_static * 100.0))
 	return "  ".join(parts)
 

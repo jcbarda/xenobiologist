@@ -10,10 +10,16 @@ extends PanelContainer
 
 const HIGHLIGHT_SECONDS := 1.2
 const WIDTH := 340.0
-const _MARGIN := 16.0
+const _MARGIN := 8.0
+## Tight, because the state dump plus six sliders has to clear 720px of viewport
+## without scrolling -- a tuning panel you have to scroll is one you stop reading.
+const _BODY_FONT := 12
+const _CAPTION_FONT := 11
 const _SKIP := ["halos", "input_queue"]
 
 var _text: RichTextLabel
+var _pause_button: Button
+var _sliders: Array[Dictionary] = []
 var _previous: Dictionary = {}
 var _changed_at: Dictionary = {}
 
@@ -28,17 +34,81 @@ func _ready() -> void:
 	box.bg_color = Color(0.03, 0.04, 0.05, 0.88)
 	box.set_border_width_all(1)
 	box.border_color = Color("334155")
-	box.set_content_margin_all(12)
+	box.set_content_margin_all(9)
 	add_theme_stylebox_override("panel", box)
+
+	# Mouse must reach the sliders, so the panel itself cannot ignore input --
+	# only the read-only text inside it does.
+	mouse_filter = Control.MOUSE_FILTER_PASS
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 3)
+	add_child(column)
 
 	_text = RichTextLabel.new()
 	_text.bbcode_enabled = true
 	_text.fit_content = true
 	_text.scroll_active = false
-	_text.add_theme_font_size_override("normal_font_size", 13)
+	_text.add_theme_font_size_override("normal_font_size", _BODY_FONT)
 	_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_text)
+	column.add_child(_text)
+
+	_build_controls(column)
 	_reposition()
+
+
+func _build_controls(column: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	column.add_child(row)
+
+	_pause_button = Button.new()
+	_pause_button.text = "PAUSE"
+	_pause_button.custom_minimum_size = Vector2(92, 26)
+	_pause_button.pressed.connect(_on_pause_pressed)
+	row.add_child(_pause_button)
+
+	var defaults := Button.new()
+	defaults.text = "DEFAULTS"
+	defaults.custom_minimum_size = Vector2(104, 26)
+	defaults.pressed.connect(_on_defaults_pressed)
+	row.add_child(defaults)
+
+	for entry: Dictionary in Tuning.SLIDERS:
+		var caption := Label.new()
+		caption.add_theme_font_size_override("font_size", _CAPTION_FONT)
+		caption.add_theme_color_override("font_color", Color("cbd5e1"))
+		column.add_child(caption)
+
+		var slider := HSlider.new()
+		slider.min_value = entry.min
+		slider.max_value = entry.max
+		slider.step = entry.step
+		slider.value = Tuning.live[entry.key]
+		slider.custom_minimum_size = Vector2(0, 14)
+		slider.value_changed.connect(
+			func(v: float) -> void: Tuning.live[entry.key] = v
+		)
+		column.add_child(slider)
+		_sliders.append({"entry": entry, "node": slider, "caption": caption})
+	_refresh_captions()
+
+
+func _on_pause_pressed() -> void:
+	Clock.paused = not Clock.paused
+	_pause_button.text = "RESUME" if Clock.paused else "PAUSE"
+
+
+func _on_defaults_pressed() -> void:
+	Tuning.restore_defaults()
+	for row: Dictionary in _sliders:
+		row.node.set_value_no_signal(Tuning.live[row.entry.key])
+	_refresh_captions()
+
+
+func _refresh_captions() -> void:
+	for row: Dictionary in _sliders:
+		row.caption.text = "%s   %.4f" % [row.entry.label, Tuning.live[row.entry.key]]
 
 
 ## Uses the configured viewport width rather than get_viewport_rect(), which under
@@ -75,16 +145,21 @@ func _process(_delta: float) -> void:
 	lines.append("  live blooms %d" % GameState.data.halos.size())
 	lines.append("")
 	lines.append("[b]DERIVED[/b]")
-	lines.append("  degradation %.2f" % Tuning.degradation(GameState.data.neural_static))
+	var st: float = GameState.data.neural_static
+	lines.append("  hyper       %.2f  (press too hard)" % Tuning.hyper_degradation(st))
+	lines.append("  hypo        %.2f  (too slow / too light)" % Tuning.hypo_degradation(st))
 	lines.append("  motor lag   %d ms" % int(GameState.motor_lag_seconds() * 1000.0))
-	lines.append("  tremor      %.0f px" % GameState.tremor_pixels())
+	lines.append("  lost presses %d%%" % int(GameState.light_press_miss_chance() * 100.0))
 	lines.append("  bloom hold  %.2f s" % GameState.bloom_hold_seconds())
 	var here: Dictionary = GameState.place()
-	lines.append("  place       %s (%.0f C / %.0f%% static)" % [
-		here.label, here.temperature, here.static * 100.0,
+	lines.append("  place       %s (%.0f C, static pull %.4f)" % [
+		here.label, here.temperature, here.static_gravity,
 	])
+	if Clock.paused:
+		lines.append("[color=#fbbf24]  -- PAUSED --[/color]")
 
 	_text.text = "\n".join(lines)
+	_refresh_captions()
 
 
 func _is_meaningful_change(before: Variant, after: Variant) -> bool:

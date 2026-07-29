@@ -24,8 +24,17 @@ signal tick(sim_delta: float)
 
 var _accumulator := 0.0
 
+## Development control. Halts the simulation without touching state, so the debug
+## panel can be read at leisure and sliders moved against a frozen run.
+var paused := false
+
 
 func _process(delta: float) -> void:
+	if paused:
+		# Drop the accumulated time rather than banking it, or unpausing would
+		# fast-forward through everything that "happened" while stopped.
+		_accumulator = 0.0
+		return
 	_accumulator += delta
 	var budget := MAX_TICKS_PER_FRAME
 	while _accumulator >= TICK_SECONDS and budget > 0:

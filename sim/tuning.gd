@@ -7,28 +7,28 @@ extends RefCounted
 ## nothing lands on the frame it is pressed).
 ##
 ## **Core temperature and neural static are independent.** Each is pulled toward
-## a rest point fixed by the PLACE the player is standing in, and neither reads
-## the other. Two separate control loops with one tool each: coolant for heat,
-## the damper for static. An earlier build derived static's rest point from body
-## heat; it made every number interlock with every other and was much harder to
-## hold, reason about, or tune.
+## its own rest point and neither reads the other -- two control loops with one
+## tool each: coolant for heat, the damper for static.
 ##
-## Consequence worth remembering: **a location can only kill by heat if its
-## ambient exceeds CORE_TEMP_COLLAPSE.** Below that, temperature simply converges
-## to ambient and sits there. The cave is survivable indefinitely for exactly
-## this reason, and it is not an accident -- it is the definition of shelter.
+## **Static's rest point is always 100%.** The character's condition is chronic
+## signal flooding; left alone it always wins. What a PLACE changes is how hard
+## it pulls, not where it is pulling to -- the cave drags slowly, open surface
+## drags fast. So shelter buys time rather than safety, and the M5 lid-close
+## becomes the only thing that genuinely resets a day.
 ##
 ## Tuned for a person to hold, not a bot to optimise: a human-paced policy
 ## (half-second reactions, threshold responses) holds the functional band at
-## about one press every 3.7 seconds, and neglect kills in ~4 minutes.
+## about one press every 3 seconds, and neglect kills in ~4 minutes.
+##
+## Numbers marked LIVE below can be moved while the game runs, from the debug
+## panel. The consts are the documented defaults; `live` is what the sim reads.
 
 # --- Core temperature -------------------------------------------------------
 
 const CORE_TEMP_START := 37.0
 const CORE_TEMP_COLLAPSE := 41.0
 
-## Pull toward ambient, and thermal inertia. Friction is high, so temperature
-## glides -- a flush is felt over seconds, not on the frame it is pressed.
+## LIVE. Pull toward ambient. Friction is thermal inertia, so temperature glides.
 const TEMP_GRAVITY := 0.0050
 const TEMP_FRICTION := 1.8
 
@@ -43,13 +43,11 @@ const STATIC_SILENCE := 0.02
 ## Resting brain activity, and where a run starts. Nobody boots at zero.
 const STATIC_BASELINE := 0.15
 
-const STATIC_GRAVITY := 0.014
 const STATIC_FRICTION := 1.1
 
-## OQ-1: cognitive load is a flat per-action cost, so frantic clicking is
-## self-punishing. Small, because it is paid on EVERY press -- including the
-## draws that fund the other presses -- and a large value made deliberate play
-## lose to sitting still.
+## LIVE. Flat per-action cost (OQ-1), so frantic clicking is self-punishing.
+## Small, because it is paid on EVERY press including the draws that fund the
+## others.
 const COGNITIVE_LOAD := 0.020
 
 ## Fraction of static velocity a damper removes, on top of its push.
@@ -57,84 +55,119 @@ const DAMPER_BRAKE := 0.50
 
 # --- Places -----------------------------------------------------------------
 
-## Each location fixes BOTH rest points. Only OASIS_EDGE is reachable in the
-## slice; the other two are the endpoints M4's excursions will run between,
-## recorded because they set the shape of the curve.
+## Each place sets ambient heat and how hard static is dragged toward 100%.
+## Only OASIS_EDGE is reachable in the slice.
 ##
-## Static ambient is what the place does to a nervous system, independent of
-## heat: the cave is restful and sits inside the functional band, the oasis edge
-## sits just above it, open surface is punishing.
+## A location can only kill by HEAT if its ambient exceeds CORE_TEMP_COLLAPSE.
+## Below that, temperature converges to ambient and sits there -- which is the
+## definition of shelter, and why the cave is survivable for a long time.
 const PLACES := {
-	&"cave": {"label": "CAVE", "temperature": 35.0, "static": 0.15},
-	&"oasis_edge": {"label": "OASIS EDGE", "temperature": 46.0, "static": 0.38},
-	&"open_surface": {"label": "OPEN SURFACE", "temperature": 60.0, "static": 0.75},
+	&"cave": {"label": "CAVE", "temperature": 35.0, "static_gravity": 0.0020},
+	&"oasis_edge": {"label": "OASIS EDGE", "temperature": 46.0, "static_gravity": 0.0060},
+	&"open_surface": {"label": "OPEN SURFACE", "temperature": 60.0, "static_gravity": 0.0200},
 }
 
 const STARTING_PLACE := &"oasis_edge"
 
 # --- Water ------------------------------------------------------------------
 
-## Water is the universal chokepoint (design-doc 4.7). Deliberately a small,
-## legible economy: one press draws one unit, and every other action spends one.
-##
-## That means roughly half of all clicking is logistics -- each useful press
-## needs a second press to pay for it, and that draw costs cognitive load and
-## heat of its own. It is the single biggest driver of how busy the game feels.
+## A small, legible economy: one press draws one unit, everything else spends
+## one. Roughly half of all clicking is therefore logistics, which is the
+## biggest single driver of how busy the game feels.
 const WATER_START := 4
-const WATER_CAPACITY := 6
+const WATER_CAPACITY := 8
 
-# --- Interface degradation (M2) ---------------------------------------------
+# --- Action deltas (LIVE) ---------------------------------------------------
 
-## Degradation begins where the functional band ends. Inside 10-30% the player
-## has full control; leaving the band is what costs them their hands. Tying the
-## onset to the band means the gauge is already explaining the symptom at the
-## moment control starts slipping.
-const DEGRADATION_ONSET := 0.30
+const FLUSH_TEMP_IMPULSE := -0.60
+const DAMPER_DAMPING := 0.16
+const DRAW_TEMP_IMPULSE := 0.08
 
-## Strain, not confusion. The command is late leaving the body -- never wrong,
-## never dropped. See design-doc 4.1: no hallucinations, no false readings.
-const MOTOR_LAG_MAX_SECONDS := 0.65
+# --- Interface degradation --------------------------------------------------
+#
+# One symptom per extreme, because the whole gamut at once read as noise rather
+# than as a body. Both are motor, never perceptual -- no hallucinations, no false
+# readings, the instruments never lie (design-doc 4.1).
+#
+#   TOO MUCH brain activity -> you press too HARD. Contact blooms burn into the
+#     pressure layer and refuse the next press inside them.
+#   TOO LITTLE               -> you are slow and press too LIGHTLY. Commands lag
+#     leaving the body, and some contacts are too faint to register at all.
+#
+# Cut after playtesting: tremor (jumping buttons did not meaningfully defeat
+# aiming unless the buttons were too small to be usable) and stray multi-finger
+# contacts (read as a visual glitch rather than as a hand).
 
-## Tremor. The buttons genuinely move, so a miss is real geometry rather than a
-## rolled failure. Erratic by design: it holds still, then jumps.
-const TREMOR_MAX_PIXELS := 30.0
-const TREMOR_DWELL_MIN := 0.05
-const TREMOR_DWELL_MAX := 0.30
+## Where each side's degradation begins -- the edges of the functional band.
+const HYPER_ONSET := 0.30
+const HYPO_ONSET := 0.10
 
-## Contact bloom: pressing too hard leaves a negative halo burned into the
-## pressure layer, and the panel will not read a second contact inside it until
-## it clears. Mashing one button blinds the spot you keep hitting.
+## Hyper: pressing too hard.
 const HALO_RADIUS_PIXELS := 68.0
 const HALO_HOLD_SECONDS_MIN := 0.30
 const HALO_HOLD_SECONDS_MAX := 2.2
+## The contact lands off where it was aimed, as the finger drags before settling.
+const SLIDE_DISTANCE_PIXELS := 46.0
+const HALO_MAX_ACTIVE := 8
 
-## A failing hand does not land once, cleanly. At high degradation a single
-## press also drags (a slide) and puts down stray contacts elsewhere -- which
-## bloom over whatever was behind them.
-const SLIDE_CHANCE := 0.9
-const SLIDE_DISTANCE_PIXELS := 90.0
-const STRAY_CONTACT_CHANCE := 0.7
-
-const HALO_MAX_ACTIVE := 12
+## Hypo: slow, and too light to register.
+const MOTOR_LAG_MAX_SECONDS := 0.80
+const LIGHT_PRESS_MISS_CHANCE := 0.55
+## Buttons fade as contact weakens, so the player can see the press failing
+## before it fails -- pairing symptom with cause, per RISK-1.
+const FADED_BUTTON_ALPHA := 0.28
 
 # --- Loop shape -------------------------------------------------------------
 
-## Flip to false to cut DRAW WATER out of the loop entirely -- the action leaves
-## the catalogue and its button never appears.
-##
-## true  -> treadmill. Water is renewable, so Phase 0 runs until the player
-##          misjudges the heat cost of fetching it.
-## false -> countdown. A fixed canteen, allocation is the only agency, and the
-##          run is always eventually fatal.
+## Flip to false to cut DRAW WATER out of the loop entirely.
 const DRAW_WATER_ENABLED := true
 
+# --- Live, editable while running -------------------------------------------
 
-## 0 inside the functional band, ramping to 1 at seizure. Every degradation reads
-## from this, so they worsen together and share one visible cause.
-static func degradation(neural_static: float) -> float:
-	var span := STATIC_SEIZURE - DEGRADATION_ONSET
-	return clampf((neural_static - DEGRADATION_ONSET) / span, 0.0, 1.0)
+static var live := {
+	"temp_gravity": TEMP_GRAVITY,
+	"static_gravity_scale": 1.0,
+	"cognitive_load": COGNITIVE_LOAD,
+	"flush_temp": FLUSH_TEMP_IMPULSE,
+	"damper_damping": DAMPER_DAMPING,
+	"draw_temp": DRAW_TEMP_IMPULSE,
+}
+
+## Drives the debug panel's sliders.
+const SLIDERS := [
+	{"key": "temp_gravity", "label": "TEMP accel", "min": 0.0, "max": 0.020, "step": 0.0005},
+	{"key": "static_gravity_scale", "label": "STATIC accel x", "min": 0.0, "max": 5.0, "step": 0.1},
+	{"key": "cognitive_load", "label": "cognitive load", "min": 0.0, "max": 0.08, "step": 0.002},
+	{"key": "flush_temp", "label": "FLUSH cooling", "min": -1.5, "max": 0.0, "step": 0.05},
+	{"key": "damper_damping", "label": "DAMP strength", "min": 0.0, "max": 0.40, "step": 0.01},
+	{"key": "draw_temp", "label": "DRAW heating", "min": 0.0, "max": 0.60, "step": 0.02},
+]
+
+
+static func restore_defaults() -> void:
+	live = {
+		"temp_gravity": TEMP_GRAVITY,
+		"static_gravity_scale": 1.0,
+		"cognitive_load": COGNITIVE_LOAD,
+		"flush_temp": FLUSH_TEMP_IMPULSE,
+		"damper_damping": DAMPER_DAMPING,
+		"draw_temp": DRAW_TEMP_IMPULSE,
+	}
 
 
 static func place(place_id: StringName) -> Dictionary:
 	return PLACES[place_id]
+
+
+## 0 inside the functional band, 1 at seizure. Drives the contact bloom.
+static func hyper_degradation(neural_static: float) -> float:
+	return clampf(
+		(neural_static - HYPER_ONSET) / (STATIC_SEIZURE - HYPER_ONSET), 0.0, 1.0
+	)
+
+
+## 0 inside the functional band, 1 at silence. Drives lag and light presses.
+static func hypo_degradation(neural_static: float) -> float:
+	return clampf(
+		(HYPO_ONSET - neural_static) / (HYPO_ONSET - STATIC_SILENCE), 0.0, 1.0
+	)

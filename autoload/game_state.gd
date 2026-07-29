@@ -98,21 +98,29 @@ func place() -> Dictionary:
 ## Called from UI on a press. Records the raw contact only -- the tick decides
 ## when (and whether) it becomes an action.
 ##
-## Returns false when the panel refuses the contact because it landed inside a
-## bloom that has not cleared. Presentation uses that to show the refusal, which
-## matters: a press that silently does nothing reads as a broken build, and a
-## press visibly swallowed by a mark the player can see reads as the device.
-func request_action(action_id: StringName, press_position: Vector2) -> bool:
+## Returns REFUSED_* when the panel does not take the contact, so presentation can
+## say which failure it was. A press that silently does nothing reads as a broken
+## build; a press the terminal explains reads as the device.
+const ACCEPTED := &"accepted"
+const REFUSED_BLOOM := &"refused_bloom"
+const REFUSED_LIGHT := &"refused_light"
+
+
+func request_action(action_id: StringName, press_position: Vector2) -> StringName:
 	if is_blacked_out():
-		return false
+		return REFUSED_LIGHT
 	if is_blocked_by_bloom(press_position):
-		return false
+		return REFUSED_BLOOM
+	# Too faint to register. Rolled here rather than in the tick because the
+	# refusal has to be reported to the player on the frame they pressed.
+	if _next_random() < light_press_miss_chance():
+		return REFUSED_LIGHT
 	_inbox.append({
 		"action": String(action_id),
 		"x": press_position.x,
 		"y": press_position.y,
 	})
-	return true
+	return ACCEPTED
 
 
 ## Read-only. Reading state outside a tick is fine; only writing is forbidden.
@@ -125,25 +133,29 @@ func is_blocked_by_bloom(press_position: Vector2) -> bool:
 
 # --- Degradation, derived from static ---------------------------------------
 #
-# All three read from Tuning.degradation(), so they worsen together and the
-# player only ever has one cause to understand.
+# One symptom per extreme. Hyper -> pressing too hard (blooms). Hypo -> too slow
+# and too light. Both motor, never perceptual.
 
 
+## HYPO symptom. Too little activity: the command is slow leaving the body. It is
+## never wrong and never altered -- only late.
 func motor_lag_seconds() -> float:
-	return Tuning.degradation(data.neural_static) * Tuning.MOTOR_LAG_MAX_SECONDS
+	return Tuning.hypo_degradation(data.neural_static) * Tuning.MOTOR_LAG_MAX_SECONDS
 
 
-func tremor_pixels() -> float:
-	return Tuning.degradation(data.neural_static) * Tuning.TREMOR_MAX_PIXELS
+## HYPO symptom. Too little activity: the contact is too faint for the panel to
+## read at all.
+func light_press_miss_chance() -> float:
+	return Tuning.hypo_degradation(data.neural_static) * Tuning.LIGHT_PRESS_MISS_CHANCE
 
 
-## How long a contact bloom lingers. Always non-zero -- the screen is
-## pressure-sensitive by design -- but strain makes the press heavier.
+## HYPER symptom. Too much activity: the press is too heavy, and the bloom it
+## burns lingers. Never zero -- the screen is pressure-sensitive by design.
 func bloom_hold_seconds() -> float:
 	return lerpf(
 		Tuning.HALO_HOLD_SECONDS_MIN,
 		Tuning.HALO_HOLD_SECONDS_MAX,
-		Tuning.degradation(data.neural_static),
+		Tuning.hyper_degradation(data.neural_static),
 	)
 
 
@@ -187,29 +199,20 @@ func _accept_contacts() -> void:
 	_inbox.clear()
 
 
-## A failing hand does not land once, cleanly.
+## One bloom per press, landing where the finger actually came down.
 ##
-## At high degradation the finger drags before it settles (a slide), and other
-## fingers put down stray contacts elsewhere on the glass. Every one of those
-## blooms, and every bloom both hides what is behind it and refuses presses
-## inside it -- so a bad press can blind a control the player was not even
-## reaching for.
+## At high static the hand drags before it settles, so the mark sits off where it
+## was aimed -- which means the dead zone is not quite where the player expects
+## it. Deliberately still ONE mark: scattering extra contacts around the screen
+## read as a visual glitch rather than as a hand, so it was cut.
 func _burn_contacts(origin: Vector2) -> void:
-	var wobble := Tuning.degradation(data.neural_static)
-	_burn_one(origin)
-	if wobble <= 0.0:
-		return
-
-	if _next_random() < Tuning.SLIDE_CHANCE * wobble:
+	var wobble := Tuning.hyper_degradation(data.neural_static)
+	var landed := origin
+	if wobble > 0.0:
 		var angle := _next_random() * TAU
-		var reach := Tuning.SLIDE_DISTANCE_PIXELS * wobble * (0.4 + _next_random() * 0.6)
-		_burn_one(origin + Vector2.from_angle(angle) * reach)
-
-	if _next_random() < Tuning.STRAY_CONTACT_CHANCE * wobble:
-		_burn_one(Vector2(
-			_next_random() * viewport_size.x,
-			_next_random() * viewport_size.y,
-		))
+		var reach := Tuning.SLIDE_DISTANCE_PIXELS * wobble * _next_random()
+		landed += Vector2.from_angle(angle) * reach
+	_burn_one(landed)
 
 
 func _burn_one(at: Vector2) -> void:
@@ -260,7 +263,7 @@ func _resolve_ready_inputs() -> void:
 		# Cognitive load is flat per action (OQ-1); exertion and damping belong
 		# to the specific activity.
 		data.static_velocity += (
-			Tuning.COGNITIVE_LOAD + action.exertion - action.damping
+			float(Tuning.live.cognitive_load) + action.exertion - action.damping
 		)
 		SignalBus.action_resolved.emit(action_id)
 
@@ -273,13 +276,17 @@ func _advance_vitals(sim_delta: float) -> void:
 	var here: Dictionary = place()
 
 	data.temp_velocity += (
-		Tuning.TEMP_GRAVITY * (here.temperature - data.core_temperature) * sim_delta
+		float(Tuning.live.temp_gravity)
+		* (here.temperature - data.core_temperature)
+		* sim_delta
 	)
 	data.temp_velocity -= data.temp_velocity * Tuning.TEMP_FRICTION * sim_delta
 	data.core_temperature += data.temp_velocity * sim_delta
 
+	# Static always wants 100%. The place only decides how hard it pulls.
+	var pull: float = here.static_gravity * float(Tuning.live.static_gravity_scale)
 	data.static_velocity += (
-		Tuning.STATIC_GRAVITY * (here.static - data.neural_static) * sim_delta
+		pull * (Tuning.STATIC_SEIZURE - data.neural_static) * sim_delta
 	)
 	data.static_velocity -= data.static_velocity * Tuning.STATIC_FRICTION * sim_delta
 	data.neural_static = clampf(
