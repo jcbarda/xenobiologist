@@ -55,8 +55,9 @@ const CORE_TEMP := {
 	],
 }
 
-## Static has no low side -- zero is simply ideal, and the character never
-## suffers from too little of it.
+## Brain activity, and the only vital that is lethal at both ends: 100% is every
+## circuit firing at once, 0% is silence. Roughly 10-30% is where a person
+## actually functions, which makes this the narrowest safe band in the game.
 ##
 ## Expressed in PERCENT, not the 0..1 the sim stores, because that is how it is
 ## read out. Anything handing a value to this spec must scale it first.
@@ -64,7 +65,9 @@ const NEURAL_STATIC := {
 	"min": 0.0,
 	"max": 100.0,
 	"bands": [
-		{"until": 33.0, "band": Band.COMFORTABLE},
+		{"until": 5.0, "band": Band.HYPO_DEADLY},
+		{"until": 10.0, "band": Band.HYPO_TOLERABLE},
+		{"until": 30.0, "band": Band.COMFORTABLE},
 		{"until": 70.0, "band": Band.HYPER_TOLERABLE},
 		{"until": INF, "band": Band.HYPER_DEADLY},
 	],

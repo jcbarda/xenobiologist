@@ -32,7 +32,8 @@ func reset() -> void:
 		"ticks_elapsed": 0,
 		"day": 1,
 		"core_temperature": Tuning.CORE_TEMP_START,
-		"neural_static": 0.0,
+		# Resting brain activity, not zero -- zero is death, not a healthy start.
+		"neural_static": Tuning.STATIC_BASELINE,
 		# Momentum. Serialised with everything else, so a reloaded run resumes
 		# mid-glide rather than snapping to rest.
 		"temp_velocity": 0.0,
@@ -118,16 +119,22 @@ func _advance_vitals(sim_delta: float) -> void:
 	data.static_velocity += Tuning.STATIC_GRAVITY * (rest - data.neural_static) * sim_delta
 	data.static_velocity -= data.static_velocity * Tuning.STATIC_FRICTION * sim_delta
 	data.neural_static = clampf(
-		data.neural_static + data.static_velocity * sim_delta, 0.0, Tuning.STATIC_BLACKOUT
+		data.neural_static + data.static_velocity * sim_delta, 0.0, Tuning.STATIC_SEIZURE
 	)
 
 
-## Not a death screen -- the sim halts and M5 will slam the lid on it. Static is
-## checked first so a heat-driven spiral reports the symptom the player was
-## watching climb.
+## Not a death screen -- the sim halts and M5 will slam the lid on it.
+##
+## Static fails at BOTH ends, because it is brain activity: everything firing at
+## once, or nothing firing at all. Over-suppression is a real way to die, which
+## is what makes the damper genuinely double-edged rather than just expensive.
+## Static is checked before heat so a spiral reports the symptom the player was
+## actually watching climb.
 func _check_collapse() -> void:
-	if data.neural_static >= Tuning.STATIC_BLACKOUT:
-		data.blackout_cause = "NEURAL STATIC"
+	if data.neural_static >= Tuning.STATIC_SEIZURE:
+		data.blackout_cause = "NEURAL SEIZURE"
+	elif data.neural_static <= Tuning.STATIC_SILENCE:
+		data.blackout_cause = "NEURAL SILENCE"
 	elif data.core_temperature >= Tuning.CORE_TEMP_COLLAPSE:
 		data.blackout_cause = "CORE TEMPERATURE"
 	else:

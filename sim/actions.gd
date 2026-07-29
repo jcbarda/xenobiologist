@@ -43,17 +43,18 @@ const CATALOGUE := {
 		"water": -2,
 		"temp_impulse": 0.0,
 		"exertion": 0.0,
-		"damping": 0.12,
+		"damping": 0.08,
 		"brake": Tuning.DAMPER_BRAKE,
 	},
-	# Renews the chokepoint, and is the one genuinely strenuous act available: it
-	# heats you and costs the most static of anything here. Its exertion is what
-	# keeps the treadmill from becoming a static engine.
+	# Renews the chokepoint. It is physical labour, so it is almost entirely a
+	# HEAT cost -- its static charge is only the flat cognitive load plus a token
+	# of situational stress. Hauling water in the heat is what makes the treadmill
+	# self-limiting: run it fast enough to suppress static and you cook.
 	DRAW_WATER: {
 		"label": "DRAW WATER",
 		"water": Tuning.WATER_PER_DRAW,
-		"temp_impulse": 0.12,
-		"exertion": 0.14,
+		"temp_impulse": 0.35,
+		"exertion": 0.02,
 		"damping": 0.0,
 		"brake": 0.0,
 	},
