@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/game_root.gd" id="1_root"]
+[ext_resource type="Script" path="res://scripts/pressure_halo_overlay.gd" id="2_halo"]
 
 [node name="GameRoot" type="Control"]
 layout_mode = 3
@@ -43,6 +44,18 @@ theme_override_constants/margin_bottom = 24
 
 [node name="ModeSwitcher" type="Control" parent="TerminalUI/MainLayout"]
 layout_mode = 2
+
+[node name="ScreenEffects" type="CanvasLayer" parent="."]
+layer = 1
+
+[node name="PressureHaloOverlay" type="ColorRect" parent="ScreenEffects"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("2_halo")
 
 [node name="PhysicalCasing" type="CanvasLayer" parent="."]
 layer = 128

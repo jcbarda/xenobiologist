@@ -121,6 +121,47 @@ const WATER_CAPACITY := 12
 ## and the engine reopens.
 const WATER_PER_DRAW := 6
 
+# --- Interface degradation (M2) ---------------------------------------------
+
+## Degradation begins where the functional band ends. Inside 10-30% the player
+## has full control; leaving the band is what costs them their hands. Tying the
+## onset to the band means the gauge already explains the symptom -- the player
+## can see they are outside nominal at the moment control starts slipping, which
+## is RISK-1's pair-the-symptom-with-its-cause built into the numbers rather than
+## bolted on.
+const DEGRADATION_ONSET := 0.30
+
+## Strain, not confusion. The command is late leaving the body -- it is never
+## wrong, and it is never dropped. See design-doc 4.1: no hallucinations, no
+## false readings, and the instruments never lie.
+const MOTOR_LAG_MAX_SECONDS := 0.65
+
+## Tremor. The buttons genuinely move, so a miss is a real miss against real
+## geometry rather than a rolled failure -- the player's aim was simply beaten by
+## a hand that will not hold still.
+const TREMOR_MAX_PIXELS := 26.0
+const TREMOR_JITTER_HZ := 7.0
+
+## Contact bloom: pressing too hard leaves a negative halo burned into the
+## pressure layer, and the panel will not read a second contact inside it until
+## it clears. Overpressure is itself a symptom of strain, so mashing one button
+## blinds exactly the spot you keep hitting.
+const HALO_RADIUS_PIXELS := 96.0
+const HALO_HOLD_SECONDS_MIN := 0.35
+const HALO_HOLD_SECONDS_MAX := 2.4
+
+## Shader slot count. Older presses are dropped rather than queued -- the newest
+## contact is the one the player is about to be blocked by.
+const HALO_MAX_ACTIVE := 8
+
+
+## 0 inside the functional band, ramping to 1 at seizure. Every degradation
+## reads from this so they all worsen together and share one cause.
+static func degradation(neural_static: float) -> float:
+	var span := STATIC_SEIZURE - DEGRADATION_ONSET
+	return clampf((neural_static - DEGRADATION_ONSET) / span, 0.0, 1.0)
+
+
 # --- Loop shape -------------------------------------------------------------
 
 ## Flip to false to cut DRAW WATER out of the loop entirely -- the action is

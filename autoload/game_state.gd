@@ -15,10 +15,12 @@ const SCHEMA_VERSION := 4
 
 var data: Dictionary = {}
 
-## Actions pressed since the last tick, resolved in press order. M2 will delay
-## entry into this queue proportionally to static -- the input lag hook is here
-## precisely so degradation does not need to reach into the sim later.
-var _pending: Array[StringName] = []
+## Raw presses the OS has reported since the last tick. Deliberately NOT part of
+## `data`: it is what the outside world said, not anything the sim knows yet. The
+## tick drains it, which is what keeps every write to `data` inside a tick.
+##
+## Entries are {"action": String, "x": float, "y": float}.
+var _inbox: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -45,21 +47,73 @@ func reset() -> void:
 		# Listed in design-doc 4.1 as a vital but deliberately inert for the
 		# slice: section 8 names two clocks, and a third would blur the read.
 		"hydration": 1.0,
+		# Commands that have left the player's intent but not yet their body.
+		# Entries are {"action": String, "ticks": int}; ticks counts down.
+		"input_queue": [],
+		# Contact blooms burned into the pressure layer. Entries are
+		# {"x", "y", "radius", "ticks", "total"}. While one is live the panel
+		# will not read a second contact inside it.
+		"halos": [],
 		# Empty while conscious; otherwise the reason, for the M5 lid slam.
 		"blackout_cause": "",
 	}
-	_pending.clear()
+	_inbox.clear()
 
 
 func is_blacked_out() -> bool:
 	return data.blackout_cause != ""
 
 
-## Called from UI. Records intent only -- see the class comment.
-func request_action(action_id: StringName) -> void:
+## Called from UI on a press. Records the raw contact only -- the tick decides
+## when (and whether) it becomes an action.
+##
+## Returns false when the panel refuses the contact because it landed inside a
+## bloom that has not cleared. Presentation uses that to show the refusal, which
+## matters: a press that silently does nothing reads as a broken build, and a
+## press visibly swallowed by a mark the player can see reads as the device.
+func request_action(action_id: StringName, press_position: Vector2) -> bool:
 	if is_blacked_out():
-		return
-	_pending.append(action_id)
+		return false
+	if is_blocked_by_bloom(press_position):
+		return false
+	_inbox.append({
+		"action": String(action_id),
+		"x": press_position.x,
+		"y": press_position.y,
+	})
+	return true
+
+
+## Read-only. Reading state outside a tick is fine; only writing is forbidden.
+func is_blocked_by_bloom(press_position: Vector2) -> bool:
+	for halo: Dictionary in data.halos:
+		if press_position.distance_to(Vector2(halo.x, halo.y)) <= halo.radius:
+			return true
+	return false
+
+
+# --- Degradation, derived from static ---------------------------------------
+#
+# All three read from Tuning.degradation(), so they worsen together and the
+# player only ever has one cause to understand.
+
+
+func motor_lag_seconds() -> float:
+	return Tuning.degradation(data.neural_static) * Tuning.MOTOR_LAG_MAX_SECONDS
+
+
+func tremor_pixels() -> float:
+	return Tuning.degradation(data.neural_static) * Tuning.TREMOR_MAX_PIXELS
+
+
+## How long a contact bloom lingers. Always non-zero -- the screen is
+## pressure-sensitive by design -- but strain makes the press heavier.
+func bloom_hold_seconds() -> float:
+	return lerpf(
+		Tuning.HALO_HOLD_SECONDS_MIN,
+		Tuning.HALO_HOLD_SECONDS_MAX,
+		Tuning.degradation(data.neural_static),
+	)
 
 
 ## True when the action's water cost can currently be paid. Presentation uses this
@@ -76,14 +130,58 @@ func _on_tick(sim_delta: float) -> void:
 	if is_blacked_out():
 		return
 	data.ticks_elapsed += 1
-	_resolve_pending_actions()
+	_accept_contacts()
+	_age_blooms()
+	_resolve_ready_inputs()
 	_advance_vitals(sim_delta)
 	_check_collapse()
 
 
+## Turn raw contacts into delayed commands, and burn a bloom where each landed.
+## The lag is measured at the moment of contact, so a command issued while calm
+## still arrives on time even if the player falls apart waiting for it.
+func _accept_contacts() -> void:
+	for contact: Dictionary in _inbox:
+		var delay_ticks := int(round(motor_lag_seconds() / Clock.TICK_SECONDS))
+		data.input_queue.append({
+			"action": contact.action,
+			"ticks": delay_ticks,
+		})
+		if data.halos.size() >= Tuning.HALO_MAX_ACTIVE:
+			data.halos.pop_front()
+		var hold_ticks := int(round(bloom_hold_seconds() / Clock.TICK_SECONDS))
+		data.halos.append({
+			"x": contact.x,
+			"y": contact.y,
+			"radius": Tuning.HALO_RADIUS_PIXELS,
+			"ticks": hold_ticks,
+			"total": maxi(hold_ticks, 1),
+		})
+	_inbox.clear()
+
+
+func _age_blooms() -> void:
+	var live: Array = []
+	for halo: Dictionary in data.halos:
+		halo.ticks -= 1
+		if halo.ticks > 0:
+			live.append(halo)
+	data.halos = live
+
+
 ## Actions push velocity, never a value -- see actions.gd.
-func _resolve_pending_actions() -> void:
-	for action_id in _pending:
+func _resolve_ready_inputs() -> void:
+	var still_waiting: Array = []
+	var ready: Array[StringName] = []
+	for command: Dictionary in data.input_queue:
+		command.ticks -= 1
+		if command.ticks > 0:
+			still_waiting.append(command)
+		else:
+			ready.append(StringName(command.action))
+	data.input_queue = still_waiting
+
+	for action_id in ready:
 		if not can_afford(action_id):
 			continue
 		var action: Dictionary = Actions.spec(action_id)
@@ -100,7 +198,6 @@ func _resolve_pending_actions() -> void:
 			Tuning.COGNITIVE_LOAD + action.exertion - action.damping
 		)
 		SignalBus.action_resolved.emit(action_id)
-	_pending.clear()
 
 
 ## Second-order integration: gravity accelerates each vital toward its rest
@@ -139,7 +236,10 @@ func _check_collapse() -> void:
 		data.blackout_cause = "CORE TEMPERATURE"
 	else:
 		return
-	_pending.clear()
+	# Commands still in flight die with consciousness; blooms stay, because they
+	# are marks on the glass rather than anything the body is doing.
+	data.input_queue.clear()
+	_inbox.clear()
 	SignalBus.blackout.emit(data.blackout_cause)
 
 
@@ -164,5 +264,5 @@ func from_json(json_text: String) -> bool:
 		])
 		return false
 	data = incoming
-	_pending.clear()
+	_inbox.clear()
 	return true

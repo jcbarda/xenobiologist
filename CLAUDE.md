@@ -69,6 +69,10 @@ To drive the sim headless, run a scene positionally: `godot --headless --path . 
 Autoloads load normally, so this is how to check that `Clock` actually advances state
 without involving a browser.
 
+**Always wrap that in `timeout 60`.** If the probe script fails to parse, the scene never
+loads, nothing ever calls `get_tree().quit()`, and Godot sits headless forever — the visible
+symptom is a hung command, not the parse error that caused it.
+
 To check the export in a browser: `cd build && python3 -m http.server 8777`, then open
 `http://localhost:8777/index.html`. The Web preset is built **without thread support**, so
 no COOP/COEP headers are needed and a plain static server is enough — keep it that way
