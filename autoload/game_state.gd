@@ -53,7 +53,7 @@ func reset() -> void:
 		"ticks_elapsed": 0,
 		"day": 1,
 		"core_temperature": Tuning.CORE_TEMP_START,
-		# Resting brain activity, not zero -- zero is death, not a healthy start.
+		# Resting cortical amplitude in uV. Not zero -- zero is death.
 		"neural_static": Tuning.STATIC_BASELINE,
 		# Momentum. Serialised with everything else, so a reloaded run resumes
 		# mid-glide rather than snapping to rest.
@@ -268,27 +268,34 @@ func _resolve_ready_inputs() -> void:
 		SignalBus.action_resolved.emit(action_id)
 
 
-## Second-order integration: gravity accelerates each vital toward its rest
-## point, friction bleeds the velocity off, and the value follows the velocity.
+## Newtonian integration. Constant acceleration toward the steady state, velocity
+## persists, value follows velocity. No friction anywhere: zero acceleration must
+## mean constant velocity, or it is not momentum.
 func _advance_vitals(sim_delta: float) -> void:
 	# Both vitals are dragged toward the place the player is standing in, and
 	# neither reads the other. Two independent loops, one tool each.
 	var here: Dictionary = place()
 
+	# Core temperature accelerates toward ambient at a constant rate, whichever
+	# side of it the body is on.
+	var gap: float = here.temperature - data.core_temperature
 	data.temp_velocity += (
-		float(Tuning.live.temp_gravity)
-		* (here.temperature - data.core_temperature)
-		* sim_delta
+		here.temp_accel * float(Tuning.live.temp_accel_scale) * signf(gap) * sim_delta
 	)
-	data.temp_velocity -= data.temp_velocity * Tuning.TEMP_FRICTION * sim_delta
 	data.core_temperature += data.temp_velocity * sim_delta
 
-	# Static always wants 100%. The place only decides how hard it pulls.
-	var pull: float = here.static_gravity * float(Tuning.live.static_gravity_scale)
+	# Arriving at ambient settles rather than overshooting. Without this the body
+	# would oscillate around the steady state forever, which no thermal system
+	# does -- it only matters where ambient is survivable, i.e. in the cave.
+	if gap * (here.temperature - data.core_temperature) < 0.0:
+		data.core_temperature = here.temperature
+		data.temp_velocity = 0.0
+
+	# Static's steady state is always seizure, so the pull is always upward. The
+	# place only decides how hard. Push it down and it comes back, faster.
 	data.static_velocity += (
-		pull * (Tuning.STATIC_SEIZURE - data.neural_static) * sim_delta
+		here.static_accel * float(Tuning.live.static_accel_scale) * sim_delta
 	)
-	data.static_velocity -= data.static_velocity * Tuning.STATIC_FRICTION * sim_delta
 	data.neural_static = clampf(
 		data.neural_static + data.static_velocity * sim_delta, 0.0, Tuning.STATIC_SEIZURE
 	)

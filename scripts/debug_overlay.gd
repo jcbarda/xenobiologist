@@ -106,9 +106,12 @@ func _on_defaults_pressed() -> void:
 	_refresh_captions()
 
 
+## Sliders read and write stored units (per second); captions show the per-minute
+## form, which is the only one with human-sized numbers.
 func _refresh_captions() -> void:
 	for row: Dictionary in _sliders:
-		row.caption.text = "%s   %.4f" % [row.entry.label, Tuning.live[row.entry.key]]
+		var shown: float = Tuning.live[row.entry.key] * float(row.entry.scale)
+		row.caption.text = "%s   %.3f %s" % [row.entry.label, shown, row.entry.unit]
 
 
 ## Uses the configured viewport width rather than get_viewport_rect(), which under
@@ -152,8 +155,8 @@ func _process(_delta: float) -> void:
 	lines.append("  lost presses %d%%" % int(GameState.light_press_miss_chance() * 100.0))
 	lines.append("  bloom hold  %.2f s" % GameState.bloom_hold_seconds())
 	var here: Dictionary = GameState.place()
-	lines.append("  place       %s (%.0f C, static pull %.4f)" % [
-		here.label, here.temperature, here.static_gravity,
+	lines.append("  place       %s (%.0f degC, static %.2f uV/min2)" % [
+		here.label, here.temperature, here.static_accel * Tuning.PER_MIN_SQ,
 	])
 	if Clock.paused:
 		lines.append("[color=#fbbf24]  -- PAUSED --[/color]")

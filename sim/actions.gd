@@ -51,7 +51,7 @@ static func spec(action_id: StringName) -> Dictionary:
 				"water": -1,
 				"temp_impulse": 0.0,
 				"exertion": 0.0,
-				"damping": float(Tuning.live.damper_damping),
+				"damping": float(Tuning.live.damper_impulse),
 				"brake": Tuning.DAMPER_BRAKE,
 			}
 		# Physical labour, so almost entirely a HEAT cost. Its static charge is

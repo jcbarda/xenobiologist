@@ -2,155 +2,189 @@ class_name Tuning
 extends RefCounted
 ## Every balance number in the slice, in one place.
 ##
-## The vitals are second-order: each has a value and a velocity, acted on by
-## gravity (a pull toward a rest point) and momentum (velocity persists, so
-## nothing lands on the frame it is pressed).
+## The vitals are Newtonian: a value, a velocity, and a **constant acceleration**
+## toward the steady state. Velocity persists. Left alone a vital does not drift
+## at a fixed rate -- it picks up speed, so neglect gets worse the longer it runs.
 ##
-## **Core temperature and neural static are independent.** Each is pulled toward
-## its own rest point and neither reads the other -- two control loops with one
-## tool each: coolant for heat, the damper for static.
+## Corrected 2026-07-29. The previous version applied an acceleration proportional
+## to the DISTANCE from the steady state and bled velocity off with a friction
+## term -- a damped spring, not gravity. Two wrong behaviours followed: vitals
+## *slowed down* as they approached the end instead of speeding up, and setting
+## acceleration to zero brought everything to a halt instead of coasting.
 ##
-## **Static's rest point is always 100%.** The character's condition is chronic
-## signal flooding; left alone it always wins. What a PLACE changes is how hard
-## it pulls, not where it is pulling to -- the cave drags slowly, open surface
-## drags fast. So shelter buys time rather than safety, and the M5 lid-close
-## becomes the only thing that genuinely resets a day.
+## There is deliberately NO friction. Zero acceleration means constant velocity,
+## because that is what momentum means. Actions are impulses: they change
+## velocity, never the value, and their effect therefore persists until something
+## cancels it.
 ##
-## Tuned for a person to hold, not a bot to optimise: a human-paced policy
-## (half-second reactions, threshold responses) holds the functional band at
-## about one press every 3 seconds, and neglect kills in ~4 minutes.
+## UNITS. Stored in base units (per second); displayed per minute, which is where
+## the numbers become human-readable.
 ##
-## Numbers marked LIVE below can be moved while the game runs, from the debug
-## panel. The consts are the documented defaults; `live` is what the sim reads.
+##   core temperature   degC        velocity degC/min   accel degC/min^2
+##   neural static      microvolts  velocity uV/min     accel uV/min^2
+##   water              decilitres
+##
+## Static is an EEG-style cortical amplitude: ~15 uV at rest, 10-30 uV is the
+## functional band, 100 uV is a seizure-grade discharge, 2 uV is silence.
 
-# --- Core temperature -------------------------------------------------------
+## Seconds per minute -- the conversion between stored and displayed units.
+const PER_MIN := 60.0
+const PER_MIN_SQ := 3600.0
+
+# --- Core temperature (degC) ------------------------------------------------
 
 const CORE_TEMP_START := 37.0
 const CORE_TEMP_COLLAPSE := 41.0
 
-## LIVE. Pull toward ambient. Friction is thermal inertia, so temperature glides.
-const TEMP_GRAVITY := 0.0050
-const TEMP_FRICTION := 1.8
+## Temperature acceleration is a property of the PLACE, not a global -- see
+## PLACES below. With constant acceleration the ambient value only sets the
+## direction and where the body settles; it no longer sets the rate, so each
+## location has to state its own. Without that, open surface cooked you at
+## exactly the same speed as the oasis.
 
-# --- Neural static ----------------------------------------------------------
+# --- Neural static (uV) -----------------------------------------------------
 
-## Static is the level of brain activity. 100% is everything firing at once --
-## seizure. 0% is silence -- braindead. Roughly 10-30% is the band a person
-## actually functions in, and it is the narrowest safe range in the game.
-const STATIC_SEIZURE := 1.0
-const STATIC_SILENCE := 0.02
+## Brain activity. Everything firing at once is a seizure; nothing firing is
+## silence. Both are fatal, and 10-30 uV is the only band a person functions in.
+const STATIC_SEIZURE := 100.0
+const STATIC_SILENCE := 2.0
+const STATIC_BASELINE := 15.0
 
-## Resting brain activity, and where a run starts. Nobody boots at zero.
-const STATIC_BASELINE := 0.15
+## Static's steady state is ALWAYS seizure -- the condition is chronic signal
+## flooding and it always wins if left alone. A place changes how hard it pulls,
+## never where it pulls to.
 
-const STATIC_FRICTION := 1.1
+## LIVE, uV/s. Flat per-action cost (OQ-1), so frantic clicking is
+## self-punishing. Paid on EVERY press, including the draws that fund the others.
+## Displayed as 0.24 uV/min.
+const COGNITIVE_LOAD := 0.004
 
-## LIVE. Flat per-action cost (OQ-1), so frantic clicking is self-punishing.
-## Small, because it is paid on EVERY press including the draws that fund the
-## others.
-const COGNITIVE_LOAD := 0.020
-
-## Fraction of static velocity a damper removes, on top of its push.
-const DAMPER_BRAKE := 0.50
+## Fraction of static velocity a damper cancels outright, on top of its impulse.
+## This is the one place damping is wanted: a brake the player chooses to apply,
+## rather than friction the world applies for free.
+const DAMPER_BRAKE := 0.35
 
 # --- Places -----------------------------------------------------------------
 
-## Each place sets ambient heat and how hard static is dragged toward 100%.
-## Only OASIS_EDGE is reachable in the slice.
+## Ambient heat, and how hard static is dragged toward seizure. Only OASIS_EDGE
+## is reachable in the slice.
 ##
 ## A location can only kill by HEAT if its ambient exceeds CORE_TEMP_COLLAPSE.
-## Below that, temperature converges to ambient and sits there -- which is the
-## definition of shelter, and why the cave is survivable for a long time.
+## Below that, temperature arrives at ambient and settles -- which is the
+## definition of shelter, and why the cave is survivable.
+## `temperature` is where the body settles; `temp_accel` is how fast it is
+## dragged there. Idle lifetimes that fall out of these:
+##   cave          cools to 35 degC and stops; static seizes at ~10 min
+##   oasis edge    heat collapse at ~250 s
+##   open surface  heat collapse at ~82 s
 const PLACES := {
-	&"cave": {"label": "CAVE", "temperature": 35.0, "static_gravity": 0.0020},
-	&"oasis_edge": {"label": "OASIS EDGE", "temperature": 46.0, "static_gravity": 0.0060},
-	&"open_surface": {"label": "OPEN SURFACE", "temperature": 60.0, "static_gravity": 0.0200},
+	&"cave": {
+		"label": "CAVE",
+		"temperature": 35.0, "temp_accel": 0.00008,
+		"static_accel": 0.00045,
+	},
+	&"oasis_edge": {
+		"label": "OASIS EDGE",
+		"temperature": 46.0, "temp_accel": 0.00013,
+		"static_accel": 0.00140,
+	},
+	&"open_surface": {
+		"label": "OPEN SURFACE",
+		"temperature": 60.0, "temp_accel": 0.00120,
+		"static_accel": 0.00420,
+	},
 }
 
 const STARTING_PLACE := &"oasis_edge"
 
-# --- Water ------------------------------------------------------------------
+# --- Water (dL) -------------------------------------------------------------
 
-## A small, legible economy: one press draws one unit, everything else spends
-## one. Roughly half of all clicking is therefore logistics, which is the
+## A small, legible economy: one press draws one decilitre, everything else
+## spends one. Roughly half of all clicking is therefore logistics, which is the
 ## biggest single driver of how busy the game feels.
 const WATER_START := 4
 const WATER_CAPACITY := 8
 
-# --- Action deltas (LIVE) ---------------------------------------------------
+# --- Action impulses (LIVE) -------------------------------------------------
+#
+# Impulses change VELOCITY, so they carry the velocity units.
 
-const FLUSH_TEMP_IMPULSE := -0.60
-const DAMPER_DAMPING := 0.16
-const DRAW_TEMP_IMPULSE := 0.08
+const FLUSH_TEMP_IMPULSE := -0.0045   # degC/s  (-0.27 degC/min)
+const DRAW_TEMP_IMPULSE := 0.0010     # degC/s  (+0.06 degC/min)
+const DAMPER_IMPULSE := 0.0280        # uV/s    (-1.68 uV/min)
 
 # --- Interface degradation --------------------------------------------------
 #
-# One symptom per extreme, because the whole gamut at once read as noise rather
-# than as a body. Both are motor, never perceptual -- no hallucinations, no false
-# readings, the instruments never lie (design-doc 4.1).
-#
-#   TOO MUCH brain activity -> you press too HARD. Contact blooms burn into the
-#     pressure layer and refuse the next press inside them.
-#   TOO LITTLE               -> you are slow and press too LIGHTLY. Commands lag
-#     leaving the body, and some contacts are too faint to register at all.
-#
-# Cut after playtesting: tremor (jumping buttons did not meaningfully defeat
-# aiming unless the buttons were too small to be usable) and stray multi-finger
-# contacts (read as a visual glitch rather than as a hand).
+# One symptom per extreme; the whole gamut at once read as noise rather than as
+# a body. Both are motor, never perceptual -- no hallucinations, no false
+# readings, the instruments never lie.
 
-## Where each side's degradation begins -- the edges of the functional band.
-const HYPER_ONSET := 0.30
-const HYPO_ONSET := 0.10
+const HYPER_ONSET := 30.0   # uV
+const HYPO_ONSET := 10.0    # uV
 
 ## Hyper: pressing too hard.
 const HALO_RADIUS_PIXELS := 68.0
 const HALO_HOLD_SECONDS_MIN := 0.30
 const HALO_HOLD_SECONDS_MAX := 2.2
-## The contact lands off where it was aimed, as the finger drags before settling.
 const SLIDE_DISTANCE_PIXELS := 46.0
 const HALO_MAX_ACTIVE := 8
 
 ## Hypo: slow, and too light to register.
 const MOTOR_LAG_MAX_SECONDS := 0.80
 const LIGHT_PRESS_MISS_CHANCE := 0.55
-## Buttons fade as contact weakens, so the player can see the press failing
-## before it fails -- pairing symptom with cause, per RISK-1.
 const FADED_BUTTON_ALPHA := 0.28
 
 # --- Loop shape -------------------------------------------------------------
 
-## Flip to false to cut DRAW WATER out of the loop entirely.
 const DRAW_WATER_ENABLED := true
 
 # --- Live, editable while running -------------------------------------------
 
 static var live := {
-	"temp_gravity": TEMP_GRAVITY,
-	"static_gravity_scale": 1.0,
+	"temp_accel_scale": 1.0,
+	"static_accel_scale": 1.0,
 	"cognitive_load": COGNITIVE_LOAD,
 	"flush_temp": FLUSH_TEMP_IMPULSE,
-	"damper_damping": DAMPER_DAMPING,
+	"damper_impulse": DAMPER_IMPULSE,
 	"draw_temp": DRAW_TEMP_IMPULSE,
 }
 
-## Drives the debug panel's sliders.
+## Drives the debug panel. `scale` converts stored units to displayed ones.
 const SLIDERS := [
-	{"key": "temp_gravity", "label": "TEMP accel", "min": 0.0, "max": 0.020, "step": 0.0005},
-	{"key": "static_gravity_scale", "label": "STATIC accel x", "min": 0.0, "max": 5.0, "step": 0.1},
-	{"key": "cognitive_load", "label": "cognitive load", "min": 0.0, "max": 0.08, "step": 0.002},
-	{"key": "flush_temp", "label": "FLUSH cooling", "min": -1.5, "max": 0.0, "step": 0.05},
-	{"key": "damper_damping", "label": "DAMP strength", "min": 0.0, "max": 0.40, "step": 0.01},
-	{"key": "draw_temp", "label": "DRAW heating", "min": 0.0, "max": 0.60, "step": 0.02},
+	{
+		"key": "temp_accel_scale", "label": "TEMP accel", "unit": "x",
+		"scale": 1.0, "min": 0.0, "max": 5.0, "step": 0.1,
+	},
+	{
+		"key": "static_accel_scale", "label": "STATIC accel", "unit": "x",
+		"scale": 1.0, "min": 0.0, "max": 5.0, "step": 0.1,
+	},
+	{
+		"key": "cognitive_load", "label": "cognitive load", "unit": "uV/min",
+		"scale": PER_MIN, "min": 0.0, "max": 0.02, "step": 0.0005,
+	},
+	{
+		"key": "flush_temp", "label": "FLUSH", "unit": "degC/min",
+		"scale": PER_MIN, "min": -0.020, "max": 0.0, "step": 0.0002,
+	},
+	{
+		"key": "damper_impulse", "label": "DAMP", "unit": "uV/min",
+		"scale": PER_MIN, "min": 0.0, "max": 0.12, "step": 0.002,
+	},
+	{
+		"key": "draw_temp", "label": "DRAW heat", "unit": "degC/min",
+		"scale": PER_MIN, "min": 0.0, "max": 0.008, "step": 0.0002,
+	},
 ]
 
 
 static func restore_defaults() -> void:
 	live = {
-		"temp_gravity": TEMP_GRAVITY,
-		"static_gravity_scale": 1.0,
+		"temp_accel_scale": 1.0,
+		"static_accel_scale": 1.0,
 		"cognitive_load": COGNITIVE_LOAD,
 		"flush_temp": FLUSH_TEMP_IMPULSE,
-		"damper_damping": DAMPER_DAMPING,
+		"damper_impulse": DAMPER_IMPULSE,
 		"draw_temp": DRAW_TEMP_IMPULSE,
 	}
 

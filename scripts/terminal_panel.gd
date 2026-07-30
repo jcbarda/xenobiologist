@@ -8,8 +8,8 @@ extends VBoxContainer
 ## pressing a button records an intent that the next Clock tick resolves.
 
 const _BUTTON_GAP := 34.0
-## Room around the row for buttons to wander into without clipping.
-const _TREMOR_MARGIN := 44.0
+## Breathing room around the key row.
+const _ROW_MARGIN := 30.0
 const _REFUSAL_HOLD_SECONDS := 1.1
 
 var _temp_gauge: VitalGauge
@@ -42,16 +42,17 @@ func _process(delta: float) -> void:
 	_apply_contact_fade()
 	_refresh_hardware_line()
 	_temp_gauge.display(data.core_temperature, data.temp_velocity)
-	_static_gauge.display(data.neural_static * 100.0, data.static_velocity)
+	_static_gauge.display(data.neural_static, data.static_velocity)
 	_water_gauge.display(float(data.water), 0.0)
 
-	# Naming both rest points is the whole legibility of the model. Momentum
-	# makes a bare reading a lie -- 30% settling toward 90% is an emergency and
-	# looks identical to 30% settling toward 10% -- and pairing each symptom with
-	# the cause driving it is RISK-1's mitigation.
+	# Naming where each vital is being dragged is the legibility of the model.
+	# Momentum makes a bare reading a lie -- a number sitting still can already
+	# have a committed velocity behind it -- and pairing each symptom with its
+	# cause is RISK-1's mitigation.
 	var here: Dictionary = GameState.place()
 	_context_line.text = (
-		"%s -- pulling core temp toward %.0f C.  Static always climbs toward 100 %%."
+		"%s -- core temp accelerating toward %.0f degC.  "
+		+ "Static always accelerates toward 100 uV."
 	) % [here.label, here.temperature]
 
 	for action_id: StringName in _buttons:
@@ -60,11 +61,11 @@ func _process(delta: float) -> void:
 
 
 func _build_gauges() -> void:
-	_temp_gauge = _add_gauge("CORE TEMP", Vitals.CORE_TEMP, " C", "%.1f", 0.02)
-	_static_gauge = _add_gauge("NEURAL STATIC", Vitals.NEURAL_STATIC, " %", "%.0f", 0.004)
+	_temp_gauge = _add_gauge("CORE TEMP", Vitals.CORE_TEMP, " degC", "%.1f", 0.0002)
+	_static_gauge = _add_gauge("NEURAL STATIC", Vitals.NEURAL_STATIC, " uV", "%.1f", 0.002)
 	# Water moves only in whole units when an action lands, so a trend arrow on
 	# it would be noise -- it is a reserve, not a vital under continuous drift.
-	_water_gauge = _add_gauge("H2O RESERVE", Vitals.WATER, "", "%.0f", INF)
+	_water_gauge = _add_gauge("H2O RESERVE", Vitals.WATER, " dL", "%.0f", INF)
 
 
 func _add_gauge(
@@ -114,7 +115,7 @@ func _refresh_hardware_line() -> void:
 			)
 		return
 
-	var static_pct: float = GameState.data.neural_static * 100.0
+	var static_uv: float = GameState.data.neural_static
 	var hyper := Tuning.hyper_degradation(GameState.data.neural_static)
 	var hypo := Tuning.hypo_degradation(GameState.data.neural_static)
 
@@ -138,13 +139,13 @@ func _refresh_hardware_line() -> void:
 			int(GameState.light_press_miss_chance() * 100.0),
 		]
 	_hardware_line.add_theme_color_override(
-		"font_color", Vitals.color_for(static_pct, Vitals.NEURAL_STATIC)
+		"font_color", Vitals.color_for(static_uv, Vitals.NEURAL_STATIC)
 	)
 
 
-## Buttons are positioned by hand rather than by a container, because a container
-## would fight the tremor offset every frame. The row is a plain Control and each
-## button owns its own position within it.
+## Keys are positioned by hand rather than by a container. Kept that way after
+## tremor was cut: the row is a plain Control, which leaves the door open for any
+## future per-key motion without a container fighting it every frame.
 func _build_actions() -> void:
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 22)
@@ -152,7 +153,7 @@ func _build_actions() -> void:
 
 	_action_row = Control.new()
 	_action_row.custom_minimum_size = Vector2(
-		0, RoundButton.DIAMETER + _TREMOR_MARGIN * 2.0
+		0, RoundButton.DIAMETER + _ROW_MARGIN * 2.0
 	)
 	add_child(_action_row)
 
@@ -163,10 +164,8 @@ func _build_actions() -> void:
 		button.text = action.label
 		button.tooltip_text = "%s -- %s" % [action.caption, _describe_cost(action)]
 		button.set_meta("home", Vector2(
-			index * (RoundButton.DIAMETER + _BUTTON_GAP), _TREMOR_MARGIN
+			index * (RoundButton.DIAMETER + _BUTTON_GAP), _ROW_MARGIN
 		))
-		button.set_meta("offset", Vector2.ZERO)
-		button.set_meta("dwell", 0.0)
 		button.position = button.get_meta("home")
 		button.pressed.connect(_on_action_pressed.bind(action_id))
 		_action_row.add_child(button)
